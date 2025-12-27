@@ -9,37 +9,7 @@ from django.conf import settings
 
 
 def send_verification_email(user):
-    """Send styled verification email with 6-digit code
     
-    Sends a professionally formatted email containing verification code.
-    If user doesn't have a verification code, generates one.
-    
-    Email Features:
-    - Purple gradient header with ThreatEye branding
-    - Large, prominent verification code display
-    - Expiry warning (5 minutes)
-    - Responsive design for mobile and desktop
-    
-    Args:
-        user (User): User instance to send verification email to.
-                     If user.verification_code exists, uses that code.
-                     Otherwise generates a new code.
-        
-    Returns:
-        bool: True if email sent successfully, False otherwise
-        
-    Example:
-        >>> from authentication.models import User
-        >>> user = User.objects.get(email='test@example.com')
-        >>> send_verification_email(user)
-        True
-        
-    Note:
-        - Generates new verification code if user doesn't have one
-        - Code expires 5 minutes after generation
-        - Sends to user.email address
-        - Uses settings.EMAIL_HOST_USER as sender
-    """
     # Use existing code or generate new one
     if not user.verification_code:
         verification_code = user.generate_verification_code()
