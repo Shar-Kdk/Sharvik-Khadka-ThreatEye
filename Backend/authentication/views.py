@@ -11,6 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, UserSerializer, EmailVerificationSerializer, ResendVerificationSerializer
 from .email_utils import send_verification_email
+from .models import User, Organization
 
 
 class LoginView(APIView):
@@ -48,10 +49,14 @@ class VerifyEmailView(APIView):
             user.verification_code = None
             user.code_expires_at = None
             user.save()
+
+            # Generate new JWT token for the verified user
+            refresh = RefreshToken.for_user(user)
             
             return Response({
                 'message': 'Email verified successfully',
                 'user': UserSerializer(user).data,
+                'token': str(refresh.access_token),
             }, status=status.HTTP_200_OK)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -98,3 +103,5 @@ class UserProfileView(APIView):
         """Return authenticated user's profile data"""
         serializer = UserSerializer(request.user)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+

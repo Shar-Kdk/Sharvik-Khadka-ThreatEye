@@ -8,7 +8,7 @@ class SubscriptionPlanAdmin(admin.ModelAdmin):
 
 @admin.register(Subscription)
 class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = ['organization', 'plan', 'status', 'start_date', 'khalti_transaction_id']
+    list_display = ['organization', 'plan', 'status', 'start_date', 'stripe_payment_intent_id']
     list_filter = ['status', 'plan']
-    search_fields = ['organization__name', 'khalti_transaction_id']
-    readonly_fields = ['khalti_transaction_id', 'khalti_pidx', 'created_at', 'updated_at']
+    search_fields = ['organization__name', 'stripe_payment_intent_id']
+    readonly_fields = ['created_at', 'updated_at']

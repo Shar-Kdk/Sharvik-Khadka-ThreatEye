@@ -1,35 +1,29 @@
 import React, { useState, useEffect } from 'react';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements } from '@stripe/react-stripe-js';
+import StripePaymentForm from '../components/StripePaymentForm';
+import { useNavigate } from 'react-router-dom';
 
-const SubscriptionPlans = () => {
+const SubscriptionPlans = ({ token }) => {
     const [plans, setPlans] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [selectedPlan, setSelectedPlan] = useState(null);
+    const [clientSecret, setClientSecret] = useState('');
+    const [stripePromise, setStripePromise] = useState(null);
     const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const navigate = useNavigate();
 
     useEffect(() => {
         fetchPlans();
     }, []);
 
-    const getToken = () => {
-        // Assuming token is stored in localStorage or you can pass it via props/context
-        // Based on App.jsx, the token state is at top level, but for now we'll check localStorage
-        // If your app handles token storage differently (e.g. only in state), we might need to adjust App.jsx
-        return localStorage.getItem('token');
-    };
-
     const fetchPlans = async () => {
         try {
-            const token = getToken();
             const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-
-            const response = await fetch(`${API_BASE_URL}/subscriptions/plans/`, {
-                headers: headers
-            });
-
+            const response = await fetch(`${API_BASE_URL}/subscriptions/plans/`, { headers });
             if (response.ok) {
                 const data = await response.json();
                 setPlans(data);
-            } else {
-                console.error('Failed to fetch plans');
             }
         } catch (error) {
             console.error('Error fetching plans:', error);
@@ -38,96 +32,150 @@ const SubscriptionPlans = () => {
         }
     };
 
-    const handleSubscribe = async (planId) => {
+    const handlePlanSelect = async (plan) => {
         try {
-            const token = getToken();
             if (!token) {
                 alert("Please login to subscribe");
                 return;
             }
 
+            setLoading(true);
             const response = await fetch(`${API_BASE_URL}/subscriptions/initiate/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ plan_id: planId })
+                body: JSON.stringify({ plan_id: plan.id })
             });
 
             const data = await response.json();
 
-            if (response.ok && data.payment_url) {
-                window.location.href = data.payment_url;
+            if (response.ok) {
+                setStripePromise(loadStripe(data.publishableKey));
+                setClientSecret(data.clientSecret);
+                setSelectedPlan(plan);
             } else {
-                console.error("Payment Error:", data);
-                alert(`Payment Failed: ${data.error}\n\nDetails: ${data.details || 'Check console for more info'}`);
+                const errorMessage = data.error || data.detail || JSON.stringify(data);
+                alert(`Error: ${errorMessage}`);
             }
         } catch (error) {
             console.error('Error initiating payment:', error);
-            alert('Payment initiation failed. Network error?');
+            alert('Failed to contact payment server.');
+        } finally {
+            setLoading(false);
         }
     };
 
-    if (loading) return (
-        <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center">
-            <p className="text-xl">Loading plans...</p>
-        </div>
-    );
+    const handlePaymentSuccess = async (paymentIntentId) => {
+        try {
+            setLoading(true);
+            const response = await fetch(`${API_BASE_URL}/subscriptions/verify/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({ payment_intent_id: paymentIntentId })
+            });
+
+            if (response.ok) {
+                navigate('/subscription/success');
+            } else {
+                navigate('/subscription/failed');
+            }
+        } catch (error) {
+            console.error('Verification failed:', error);
+            navigate('/subscription/failed');
+        }
+    };
+
+    if (loading && !selectedPlan) {
+        return (
+            <div className="min-h-screen bg-[#010409] text-gray-400 flex items-center justify-center">
+                <p>Loading plans...</p>
+            </div>
+        );
+    }
 
     return (
-        <div className="min-h-screen bg-gray-900 text-white font-sans">
-            {/* Navbar */}
-            <nav className="bg-gray-800 p-4 mb-8 border-b border-gray-700">
-                <div className="container mx-auto flex justify-between items-center">
-                    <h1 className="text-xl font-bold">ThreatEye Subscriptions</h1>
-                    <a href="/dashboard" className="text-gray-300 hover:text-white transition-colors text-sm">
-                        &larr; Back to Dashboard
-                    </a>
-                </div>
-            </nav>
-
-            <div className="container mx-auto px-4 pb-12">
-                <div className="text-center mb-10">
-                    <h1 className="text-3xl font-bold mb-4">Subscription Plans</h1>
-                    <p className="text-gray-400 max-w-xl mx-auto">
-                        Choose the plan that suits your security needs.
-                    </p>
+        <div className="min-h-screen bg-[#010409] text-gray-200 p-6">
+            <div className="max-w-4xl mx-auto">
+                <div className="flex justify-between items-center mb-12">
+                    <h1 className="text-2xl font-bold text-white">ThreatEye Subscription</h1>
+                    <button
+                        onClick={() => navigate('/dashboard')}
+                        className="text-sm text-gray-400 hover:text-white"
+                    >
+                        Back to Dashboard
+                    </button>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-6 max-w-4xl mx-auto">
-                    {plans.map((plan) => (
-                        <div key={plan.id} className="bg-gray-800 border border-gray-700 rounded-lg p-6 flex flex-col">
-                            <h2 className="text-2xl font-bold mb-2">{plan.display_name}</h2>
-                            <div className="mb-6">
-                                <span className="text-4xl font-bold text-white">Rs. {plan.price}</span>
-                                <span className="text-gray-500 ml-1">/ month</span>
+                {!selectedPlan ? (
+                    <>
+                        {plans.length === 0 ? (
+                            <div className="text-center py-12">
+                                <p className="text-gray-400 mb-4">No subscription plans available at the moment.</p>
+                                <button
+                                    onClick={() => navigate('/dashboard')}
+                                    className="text-blue-500 hover:text-blue-400"
+                                >
+                                    Return to Dashboard
+                                </button>
                             </div>
+                        ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {plans.map((plan) => (
+                                    <div key={plan.id} className="bg-[#0d1117] border border-[#30363d] rounded-lg p-8 flex flex-col">
+                                        <h2 className="text-xl font-bold text-white mb-2">{plan.display_name}</h2>
+                                        <p className="text-3xl font-bold text-white mb-6">${plan.price}<span className="text-sm text-gray-500 font-normal"> / mo</span></p>
 
-                            <div className="flex-grow mb-8 text-gray-300 space-y-3">
-                                <p className="flex items-center">
-                                    <span className="text-blue-500 mr-2">•</span>
-                                    {plan.max_users} Users Allowed
-                                </p>
-                                <p className="flex items-center">
-                                    <span className={plan.email_alerts_enabled ? "text-blue-500 mr-2" : "text-gray-500 mr-2"}>•</span>
-                                    {plan.email_alerts_enabled ? "Email Alerts Included" : "No Email Alerts"}
-                                </p>
-                                <p className="flex items-center">
-                                    <span className="text-blue-500 mr-2">•</span>
-                                    Standard Support
-                                </p>
+                                        <ul className="space-y-4 mb-8 flex-grow">
+                                            <li className="flex items-center text-sm text-gray-300">
+                                                <span className="text-blue-500 mr-2">✓</span> {plan.max_users} Users
+                                            </li>
+                                            <li className="flex items-center text-sm text-gray-300">
+                                                <span className="text-blue-500 mr-2">✓</span> {plan.email_alerts_enabled ? "Email Alerts" : "Dashboard Only"}
+                                            </li>
+                                        </ul>
+
+                                        <button
+                                            onClick={() => handlePlanSelect(plan)}
+                                            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-md transition-colors"
+                                        >
+                                            Select Plan
+                                        </button>
+                                    </div>
+                                ))}
                             </div>
+                        )}
+                    </>
+                ) : (
+                    <div className="max-w-md mx-auto">
+                        <button
+                            onClick={() => setSelectedPlan(null)}
+                            className="text-sm text-gray-500 hover:text-white mb-6"
+                        >
+                            &larr; Different Plan
+                        </button>
 
-                            <button
-                                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 px-4 rounded transition-colors duration-200"
-                                onClick={() => handleSubscribe(plan.id)}
-                            >
-                                Subscribe Monthly
-                            </button>
+                        <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-8">
+                            <h2 className="text-xl font-bold text-white mb-1">Payment Details</h2>
+                            <p className="text-sm text-gray-400 mb-8">Subscribing to {selectedPlan.display_name}</p>
+
+                            {stripePromise && clientSecret && (
+                                <Elements stripe={stripePromise} options={{ clientSecret }}>
+                                    <StripePaymentForm
+                                        clientSecret={clientSecret}
+                                        onPaymentSuccess={handlePaymentSuccess}
+                                        planName={selectedPlan.display_name}
+                                        amount={selectedPlan.price}
+                                    />
+                                </Elements>
+                            )}
                         </div>
-                    ))}
-                </div>
+                    </div>
+                )}
             </div>
         </div>
     );

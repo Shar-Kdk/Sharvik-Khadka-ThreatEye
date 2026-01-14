@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { login } from '../services/api';
 
 function Login({ onLoginSuccess }) {
@@ -6,6 +7,7 @@ function Login({ onLoginSuccess }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -15,6 +17,13 @@ function Login({ onLoginSuccess }) {
     try {
       const data = await login(email, password);
       onLoginSuccess(data);
+      
+      // Redirect based on verification status
+      if (!data.user.is_verified) {
+        navigate('/verify-email');
+      } else {
+        navigate('/dashboard');
+      }
     } catch (err) {
       setError(err.message);
     } finally {

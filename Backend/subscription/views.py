@@ -1,7 +1,4 @@
-import requests
-import json
-from django.shortcuts import redirect
-from django.urls import reverse
+import stripe
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.decorators import api_view, permission_classes
@@ -9,6 +6,9 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework import status
 from .models import Subscription, SubscriptionPlan
+from authentication.models import Organization, User
+
+stripe.api_key = settings.STRIPE_SECRET_KEY
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
@@ -16,134 +16,119 @@ def get_plans(request):
     plans = SubscriptionPlan.objects.all().values('id', 'display_name', 'max_users', 'email_alerts_enabled', 'price')
     return Response(list(plans))
 
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def initiate_payment(request):
+    """
+    Creates a Stripe PaymentIntent and a pending subscription.
+    """
     try:
-        # data is already parsed in request.data for DRF views
         plan_id = request.data.get('plan_id')
-
-        # User has a ForeignKey to Organization named 'organization'
-        org = request.user.organization
-
+        user = request.user
+        
+        org = user.organization
         if not org:
-            return Response({'error': 'User does not belong to any organization. Please contact support or create an organization.'}, status=status.HTTP_403_FORBIDDEN)
+            return Response({'error': 'User does not belong to any organization.'}, status=status.HTTP_403_FORBIDDEN)
 
         try:
             plan = SubscriptionPlan.objects.get(id=plan_id)
         except SubscriptionPlan.DoesNotExist:
-             return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
+            return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        sub, created = Subscription.objects.get_or_create(
+        # Create the PaymentIntent
+        amount = int(plan.price * 100) 
+        
+        try:
+            intent = stripe.PaymentIntent.create(
+                amount=amount,
+                currency='usd', # Using USD as it's more widely supported for test accounts
+                metadata={
+                    'org_id': org.id,
+                    'plan_id': plan.id,
+                    'user_email': user.email
+                }
+            )
+        except stripe.error.StripeError as e:
+            return Response({'error': f"Stripe Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
+        
+        # Create/Update pending subscription
+
+        # Create a new pending subscription
+        sub = Subscription.objects.create(
             organization=org,
-            defaults={'plan': plan, 'status': 'pending'}
-        )
-        if not created:
-            sub.plan = plan
-            sub.status = 'pending'
-            sub.save()
-
-        amount = int(plan.price * 100) # Khalti expects paisa
-        return_url = request.build_absolute_uri(reverse('payment_callback'))
-        purchase_order_id = f"Sub-{sub.id}"
-
-        payload = {
-            "return_url": return_url,
-            "website_url": request.build_absolute_uri('/'),
-            "amount": amount,
-            "purchase_order_id": purchase_order_id,
-            "purchase_order_name": plan.display_name,
-            "customer_info": {
-                "name": request.user.get_full_name() or request.user.username,
-                "email": request.user.email,
-                "phone": "9800000001"
-            }
-        }
-
-        headers = {
-            "Authorization": f"Key {settings.KHALTI_SECRET_KEY}",
-            "Content-Type": "application/json",
-        }
-
-        response = requests.post(
-            f"{settings.KHALTI_API_URL}epayment/initiate/",
-            json=payload,
-            headers=headers,
-            timeout=10
+            plan=plan,
+            status='pending',
+            stripe_payment_intent_id=intent.id
         )
 
-        if response.status_code == 200:
-            res = response.json()
-            sub.khalti_pidx = res.get('pidx')
-            sub.save()
-            return Response({'payment_url': res['payment_url']})
-        else:
-            return Response({'error': 'Payment initiation failed', 'details': response.text}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        return Response({
+            'clientSecret': intent.client_secret,
+            'publishableKey': settings.STRIPE_PUBLISHABLE_KEY,
+            'subscriptionId': sub.id
+        })
 
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def verify_payment(request):
+    """
+    Final check after frontend confirms payment.
+    """
+    payment_intent_id = request.data.get('payment_intent_id')
+    try:
+        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        if intent.status == 'succeeded':
+            sub = Subscription.objects.get(stripe_payment_intent_id=payment_intent_id)
+            sub.status = 'active'
+            sub.start_date = timezone.now()
+            # Set end date to 1 month from now for demo
+            sub.end_date = timezone.now() + timezone.timedelta(days=30)
+            sub.save()
 
-# Callback is usually a standard view because it's hit by the browser/Khalti, not via AJAX with Auth header usually. 
-# Khalti redirects the user browser to this URL.
-# So this one should remain a standard Django view or handle no-auth.
-def payment_callback(request):
-    pidx = request.GET.get('pidx')
-    status = request.GET.get('status')
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'http://localhost:5173')
+            # Sync Organization tier and capacity
+            org = sub.organization
+            if org:
+                # Map plan display name to organization tier constants
+                plan_name_lower = sub.plan.display_name.lower()
+                if 'basic' in plan_name_lower:
+                    org.subscription_tier = 'basic'
+                elif 'professional' in plan_name_lower:
+                    org.subscription_tier = 'professional'
+                elif 'enterprise' in plan_name_lower:
+                    org.subscription_tier = 'professional' # Map enterprise to professional for now or add to choices
+                
+                org.is_active = True
+                org.save() # This also updates max_users via Organization.save()
 
-    if status == "Completed" and pidx:
-        try:
-            payload = {"pidx": pidx}
-            headers = {"Authorization": f"Key {settings.KHALTI_SECRET_KEY}"}
-
-            verify_res = requests.post(
-                f"{settings.KHALTI_API_URL}epayment/lookup/",
-                json=payload,
-                headers=headers,
-                timeout=10
-            )
-
-            if verify_res.status_code == 200:
-                data = verify_res.json()
-                if data.get('status') == "Completed":
-                    sub = Subscription.objects.filter(khalti_pidx=pidx).first()
-                    if sub:
-                        sub.status = 'active'
-                        sub.start_date = timezone.now()
-                        sub.khalti_transaction_id = data.get('transaction_id')
-                        sub.save()
-                        return redirect(f'{frontend_url}/subscription/success?txn={sub.khalti_transaction_id}')
-
-        except Exception as e:
-            return redirect(f'{frontend_url}/subscription/failed?error={str(e)}')
-
-    return redirect(f'{frontend_url}/subscription/failed')
-
+            return Response({'status': 'success', 'plan': sub.plan.display_name})
+        else:
+            return Response({'status': 'failed', 'stripe_status': intent.status})
+    except Exception as e:
+        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def subscription_status(request):
-    # Platform Owners, Superusers, and ID=1 always have full access (Admin/Dev)
-    if request.user.role == 'platform_owner' or request.user.is_superuser or request.user.id == 1:
+    if request.user.role == 'platform_owner' or request.user.is_superuser:
         return Response({
             'status': 'active',
             'plan': 'Platform Administrator',
             'max_users': 9999,
-            'email_alerts_enabled': True,
+            'email_alerts': True,
             'start_date': timezone.now().isoformat(),
-            'end_date': None,  # Never expires
+            'end_date': None,
         })
 
     org = getattr(request.user, 'organization', None)
     if not org:
-         org = request.user.organization_set.first()
-         
-    if not org:
-        return Response({'error': 'Organization not found'}, status=status.HTTP_403_FORBIDDEN)
+        return Response({'status': 'none', 'error': 'No organization linked'})
 
-    sub = Subscription.objects.filter(organization=org).first()
+    # Prioritize active subscription, otherwise get the most recent one
+    sub = Subscription.objects.filter(organization=org, status='active').order_by('-created_at').first()
+    if not sub:
+        sub = Subscription.objects.filter(organization=org).order_by('-created_at').first()
     if sub:
         return Response({
             'status': sub.status,
@@ -154,3 +139,82 @@ def subscription_status(request):
             'end_date': sub.end_date.isoformat() if sub.end_date else None,
         })
     return Response({'status': 'none'})
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_platform_stats(request):
+    if request.user.role != 'platform_owner':
+        return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+    
+    total_users = User.objects.count()
+    total_orgs = Organization.objects.count()
+    active_orgs = Organization.objects.filter(is_active=True).count()
+    
+    # Calculate plan distribution
+    plans = SubscriptionPlan.objects.all()
+    plan_distribution = []
+    for plan in plans:
+        count = Subscription.objects.filter(plan=plan, status='active').count()
+        plan_distribution.append({
+            'name': plan.display_name,
+            'count': count
+        })
+    
+    # Add Not Subscribed count
+    not_subscribed_count = Organization.objects.filter(is_active=False).count()
+    if not_subscribed_count > 0:
+        plan_distribution.append({
+            'name': 'Not Subscribed',
+            'count': not_subscribed_count
+        })
+
+    # Detailed org list
+    orgs = Organization.objects.all()
+    org_list = []
+    for org in orgs:
+        # Prioritize active subscription
+        sub = Subscription.objects.filter(organization=org, status='active').order_by('-created_at').first()
+        if not sub:
+            sub = Subscription.objects.filter(organization=org).order_by('-created_at').first()
+        org_list.append({
+            'id': org.id,
+            'name': org.name,
+            'plan': sub.plan.display_name if sub and sub.plan else 'No License',
+            'users': org.users.count(),
+            'status': sub.status if sub else 'none',
+            'renewal': sub.end_date if sub else 'N/A'
+        })
+
+    return Response({
+        'total_users': total_users,
+        'total_organizations': total_orgs,
+        'active_organizations': active_orgs,
+        'plan_distribution': plan_distribution,
+        'organizations': org_list
+    })
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_subscription_history(request):
+    """
+    Returns all subscription records for the user's organization.
+    """
+    org = getattr(request.user, 'organization', None)
+    if not org:
+        return Response({'error': 'No organization linked'}, status=status.HTTP_403_FORBIDDEN)
+    
+    subscriptions = Subscription.objects.filter(organization=org).order_by('-created_at')
+    
+    history = []
+    for sub in subscriptions:
+        history.append({
+            'id': sub.id,
+            'plan_name': sub.plan.display_name if sub.plan else 'Unknown',
+            'status': sub.status,
+            'amount': float(sub.plan.price) if sub.plan else 0,
+            'start_date': sub.start_date.isoformat() if sub.start_date else None,
+            'end_date': sub.end_date.isoformat() if sub.end_date else None,
+            'created_at': sub.created_at.isoformat(),
+        })
+    
+    return Response(history)

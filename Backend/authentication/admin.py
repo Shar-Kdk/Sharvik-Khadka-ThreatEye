@@ -8,8 +8,40 @@ from .email_utils import send_verification_email
 from django.core.validators import validate_email as django_validate_email
 
 
+class OrganizationAdminForm(forms.ModelForm):
+    class Meta:
+        model = Organization
+        fields = '__all__'
+    
+    def clean(self):
+        cleaned_data = super().clean()
+        subscription_tier = cleaned_data.get('subscription_tier')
+        max_users = cleaned_data.get('max_users')
+        
+        # Auto-set max_users based on subscription tier if creating new org
+        if not self.instance.pk:
+            if subscription_tier == Organization.TIER_NOT_SUBSCRIBED:
+                cleaned_data['max_users'] = 1
+            elif subscription_tier == Organization.TIER_BASIC:
+                cleaned_data['max_users'] = 5
+            elif subscription_tier == Organization.TIER_PROFESSIONAL:
+                cleaned_data['max_users'] = 20
+        
+        # Validate max_users doesn't go below current user count
+        if self.instance.pk and max_users:
+            current_users = self.instance.get_user_count()
+            if max_users < current_users:
+                raise ValidationError({
+                    'max_users': f'Cannot set max users to {max_users}. '
+                    f'Organization currently has {current_users} active users.'
+                })
+        
+        return cleaned_data
+
+
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
+    form = OrganizationAdminForm
     list_display = ['name', 'subscription_tier', 'is_active', 'get_user_count', 'max_users', 'created_at']
     list_filter = ['subscription_tier', 'is_active', 'created_at']
     search_fields = ['name']
@@ -20,7 +52,8 @@ class OrganizationAdmin(admin.ModelAdmin):
             'fields': ('name', 'is_active')
         }),
         ('Subscription', {
-            'fields': ('subscription_tier', 'max_users')
+            'fields': ('subscription_tier', 'max_users'),
+            'description': 'Max users: Not Subscribed=1, Basic plan=5, Professional plan=20'
         }),
         ('Statistics', {
             'fields': ('created_at', 'get_user_count'),
@@ -38,10 +71,24 @@ class UserCreationForm(forms.ModelForm):
         label='First Name',
         max_length=150,
         required=True,
-        help_text='Required. User\'s first name.'
+        help_text='Required. User\'s first name.',
+        widget=forms.TextInput(attrs={'autocomplete': 'off'})
     )
-    password1 = forms.CharField(label='Password', widget=forms.PasswordInput)
-    password2 = forms.CharField(label='Password confirmation', widget=forms.PasswordInput)
+    last_name = forms.CharField(
+        label='Last Name',
+        max_length=150,
+        required=False,
+        help_text='Optional. User\'s last name.',
+        widget=forms.TextInput(attrs={'autocomplete': 'off'})
+    )
+    password1 = forms.CharField(
+        label='Password',
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'})
+    )
+    password2 = forms.CharField(
+        label='Password confirmation',
+        widget=forms.PasswordInput(attrs={'autocomplete': 'new-password'})
+    )
 
     class Meta:
         model = User

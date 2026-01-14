@@ -7,8 +7,11 @@ const SubscriptionSuccess = () => {
 
     useEffect(() => {
         const txn = searchParams.get('txn');
+        const sessionId = searchParams.get('session_id');
         if (txn) {
             setTxnId(txn);
+        } else if (sessionId) {
+            setTxnId(sessionId);
         }
     }, [searchParams]);
 

@@ -8,46 +8,38 @@ import SubscriptionSuccess from './pages/SubscriptionSuccess';
 import SubscriptionFailed from './pages/SubscriptionFailed';
 
 function App() {
-  const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('user');
-    return saved ? JSON.parse(saved) : null;
-  });
-  const [token, setToken] = useState(() => localStorage.getItem('token'));
+  const [user, setUser] = useState(null);
+  const [token, setToken] = useState(null);
   const [showVerification, setShowVerification] = useState(false);
 
   const handleLoginSuccess = (data) => {
     setUser(data.user);
     setToken(data.token);
-    localStorage.setItem('user', JSON.stringify(data.user));
-    localStorage.setItem('token', data.token);
 
-    // Show verification screen if user is not verified
+    // Update verification state
     if (!data.user.is_verified) {
       setShowVerification(true);
+    } else {
+      setShowVerification(false);
     }
   };
 
-  const handleVerified = () => {
-    // Update user's verification status
-    const updatedUser = { ...user, is_verified: true };
-    setUser(updatedUser);
-    localStorage.setItem('user', JSON.stringify(updatedUser));
+  const handleVerified = (data) => {
+    // Update user's verification status and token
+    setUser(data.user);
+    setToken(data.token);
     setShowVerification(false);
   };
 
   const handleBackToLogin = () => {
     setUser(null);
     setToken(null);
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
     setShowVerification(false);
   };
 
   const handleLogout = () => {
     setUser(null);
     setToken(null);
-    localStorage.removeItem('user');
-    localStorage.removeItem('token');
     setShowVerification(false);
   };
 
@@ -57,7 +49,7 @@ function App() {
         {/* Public Routes */}
         <Route
           path="/login"
-          element={!user ? <Login onLoginSuccess={handleLoginSuccess} /> : <Navigate to="/dashboard" />}
+          element={<Login onLoginSuccess={handleLoginSuccess} />}
         />
 
         {/* Verification Route */}
@@ -69,13 +61,13 @@ function App() {
               onVerified={handleVerified}
               onBack={handleBackToLogin}
             />
-          ) : <Navigate to="/login" />}
+          ) : <Navigate to={user ? "/dashboard" : "/login"} />}
         />
 
         {/* Subscription Routes */}
         <Route
           path="/subscriptions/plans"
-          element={user ? <SubscriptionPlans /> : <Navigate to="/login" />}
+          element={user ? <SubscriptionPlans token={token} /> : <Navigate to="/login" />}
         />
         <Route
           path="/subscription/success"
@@ -86,11 +78,11 @@ function App() {
           element={user ? <SubscriptionFailed /> : <Navigate to="/login" />}
         />
 
-        {/* Dashboard Route */}
+        {/* Dashboard Route (Nested) */}
         <Route
-          path="/dashboard"
+          path="/dashboard/*"
           element={user && !showVerification ? (
-            <Dashboard user={user} onLogout={handleLogout} />
+            <Dashboard user={user} token={token} onLogout={handleLogout} />
           ) : <Navigate to="/login" />}
         />
 

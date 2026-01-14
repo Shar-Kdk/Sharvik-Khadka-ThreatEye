@@ -8,13 +8,19 @@ from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 
 
+import threading
+
+def _send_email_async(msg):
+    """Helper to send email in background thread"""
+    try:
+        msg.send()
+    except Exception as e:
+        print(f"Background email sending failed: {str(e)}")
+
 def send_verification_email(user):
-    
-    # Use existing code or generate new one
-    if not user.verification_code:
-        verification_code = user.generate_verification_code()
-    else:
-        verification_code = user.verification_code
+    # Always generate a fresh code for security and to reset the 5-minute timer
+    # This prevents users from getting stuck with an expired code when clicking "Resend"
+    verification_code = user.generate_verification_code()
     
     subject = '🔐 ThreatEye - Verify Your Email'
     
@@ -124,15 +130,15 @@ ThreatEye Security Team
             settings.DEFAULT_FROM_EMAIL,
             [user.email]
         )
-        
-        # Attach HTML version (preferred by email clients)
         msg.attach_alternative(html_content, "text/html")
         
-        # Send email via SMTP (Gmail)
-        msg.send()
+        # Start a background thread to send the email
+        # This prevents the SMTP connection time (handshake) from blocking the user's API request
+        thread = threading.Thread(target=_send_email_async, args=(msg,))
+        thread.start()
+        
         return True
         
     except Exception as e:
-        # Log error and return False (email sending failed)
-        print(f"Error sending email to {user.email}: {str(e)}")
+        print(f"Error preparing background email for {user.email}: {str(e)}")
         return False

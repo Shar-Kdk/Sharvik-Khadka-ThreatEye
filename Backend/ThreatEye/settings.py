@@ -14,10 +14,10 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 from pathlib import Path
 from dotenv import load_dotenv
+load_dotenv()
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
-
-load_dotenv(os.path.join(BASE_DIR, '.env'))
 
 
 # Quick-start development settings - unsuitable for production
@@ -83,7 +83,17 @@ WSGI_APPLICATION = 'ThreatEye.wsgi.application'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#databases
 
 import pymysql
+pymysql.version_info = (2, 2, 8, "final", 0)
 pymysql.install_as_MySQLdb()
+
+# Bypass MariaDB version check for Django 4.2+ (requires 10.6, found 10.4)
+from django.db.backends.base.base import BaseDatabaseWrapper
+BaseDatabaseWrapper.check_database_version_supported = lambda self: None
+
+# Disable RETURNING clause for MariaDB < 10.5
+from django.db.backends.mysql.features import DatabaseFeatures
+DatabaseFeatures.can_return_columns_from_insert = property(lambda self: False)
+DatabaseFeatures.can_return_rows_from_bulk_insert = property(lambda self: False)
 
 DATABASES = {
     'default': {
@@ -162,15 +172,12 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
-    "http://localhost:5174",
     "http://127.0.0.1:3000",
     "http://127.0.0.1:5173",
-    "http://127.0.0.1:5174",
 ]
 
 CORS_ALLOW_CREDENTIALS = True
 # Email Configuration (Gmail)
-import os
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
@@ -180,7 +187,8 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'sharvikhadka@gmail.com')
 
 
-# Khalti Payment Gateway
-KHALTI_SECRET_KEY = os.environ.get('KHALTI_SECRET_KEY', 'test_secret_key')
-KHALTI_API_URL = 'https://a.khalti.com/api/v2/'
+# Stripe Payment Gateway
+STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
+STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
+
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')

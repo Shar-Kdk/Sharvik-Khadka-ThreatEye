@@ -8,16 +8,14 @@ from django.core.exceptions import ValidationError
 
 class Organization(models.Model):
     
-    TIER_FREE = 'free'
+    TIER_NOT_SUBSCRIBED = 'not_subscribed'
     TIER_BASIC = 'basic'
     TIER_PROFESSIONAL = 'professional'
-    TIER_ENTERPRISE = 'enterprise'
     
     SUBSCRIPTION_TIERS = [
-        (TIER_FREE, 'Free Trial'),
-        (TIER_BASIC, 'Basic'),
-        (TIER_PROFESSIONAL, 'Professional'),
-        (TIER_ENTERPRISE, 'Enterprise'),
+        (TIER_NOT_SUBSCRIBED, 'Not Subscribed'),
+        (TIER_BASIC, 'Basic plan'),
+        (TIER_PROFESSIONAL, 'Professional plan'),
     ]
     
     name = models.CharField(
@@ -30,17 +28,17 @@ class Organization(models.Model):
         help_text="Organization creation timestamp"
     )
     is_active = models.BooleanField(
-        default=True,
+        default=False,
         help_text="Whether organization subscription is active"
     )
     subscription_tier = models.CharField(
         max_length=20,
         choices=SUBSCRIPTION_TIERS,
-        default=TIER_FREE,
+        default=TIER_NOT_SUBSCRIBED,
         help_text="Current subscription tier"
     )
     max_users = models.IntegerField(
-        default=5,
+        default=1,
         help_text="Maximum number of users allowed in this organization"
     )
     
@@ -57,6 +55,28 @@ class Organization(models.Model):
     
     def can_add_user(self):
         return self.get_user_count() < self.max_users
+    
+    def save(self, *args, **kwargs):
+        # Track if subscription tier changed
+        tier_changed = False
+        if self.pk:
+            old_instance = Organization.objects.get(pk=self.pk)
+            tier_changed = old_instance.subscription_tier != self.subscription_tier
+        
+        # Auto-set max_users based on subscription tier
+        # Only update if it's a new org OR tier changed
+        if self.pk is None or tier_changed:
+            if self.subscription_tier == self.TIER_NOT_SUBSCRIBED:
+                self.max_users = 1
+                self.is_active = False
+            elif self.subscription_tier == self.TIER_BASIC:
+                self.max_users = 5
+                self.is_active = True
+            elif self.subscription_tier == self.TIER_PROFESSIONAL:
+                self.max_users = 20
+                self.is_active = True
+        
+        super().save(*args, **kwargs)
 
 
 class UserManager(BaseUserManager):
@@ -76,6 +96,7 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
         extra_fields.setdefault('is_verified', True)
+        extra_fields.setdefault('role', 'platform_owner')  # Set platform_owner as default for superusers
 
         if extra_fields.get('is_staff') is not True:
             raise ValueError('Superuser must have is_staff=True')
@@ -177,5 +198,7 @@ class User(AbstractUser):
             })
     
     def save(self, *args, **kwargs):
-        self.clean()
+        # Skip validation for superusers to allow flexible creation
+        if not (self.is_superuser and self.is_staff):
+            self.clean()
         super().save(*args, **kwargs)

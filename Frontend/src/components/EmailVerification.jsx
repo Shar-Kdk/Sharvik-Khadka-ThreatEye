@@ -1,10 +1,13 @@
 import { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 
 function EmailVerification({ email, onVerified, onBack }) {
   const [code, setCode] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState('');
+  const navigate = useNavigate();
+
 
   // Auto-hide error messages after 5 seconds
   useEffect(() => {
@@ -22,13 +25,15 @@ function EmailVerification({ email, onVerified, onBack }) {
     }
   }, [message]);
 
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000';
+
   const handleVerify = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/auth/verify-email/', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/verify-email/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -40,7 +45,10 @@ function EmailVerification({ email, onVerified, onBack }) {
 
       if (response.ok) {
         setMessage('Email verified successfully! Redirecting...');
-        setTimeout(() => onVerified(), 1500);
+        setTimeout(() => {
+            onVerified(data);
+            navigate('/dashboard');
+        }, 1500);
       } else {
         setError(data.error || 'Verification failed. Please check your code.');
       }
@@ -51,13 +59,27 @@ function EmailVerification({ email, onVerified, onBack }) {
     }
   };
 
+  const [resendTimer, setResendTimer] = useState(0);
+
+  useEffect(() => {
+    let timer;
+    if (resendTimer > 0) {
+      timer = setInterval(() => {
+        setResendTimer((prev) => prev - 1);
+      }, 1000);
+    }
+    return () => clearInterval(timer);
+  }, [resendTimer]);
+
   const handleResend = async () => {
+    if (resendTimer > 0) return;
+
     setError('');
     setMessage('');
     setLoading(true);
 
     try {
-      const response = await fetch('http://127.0.0.1:8000/api/auth/resend-verification/', {
+      const response = await fetch(`${API_BASE_URL}/api/auth/resend-verification/`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -69,6 +91,7 @@ function EmailVerification({ email, onVerified, onBack }) {
 
       if (response.ok) {
         setMessage('Verification code resent! Check your email.');
+        setResendTimer(60); // Set 60 second cooldown
       } else {
         setError(data.error || 'Failed to resend code.');
       }
@@ -83,7 +106,7 @@ function EmailVerification({ email, onVerified, onBack }) {
     <div className="min-h-screen flex items-center justify-center bg-gray-900">
       <div className="bg-gray-800 p-8 rounded-lg shadow-lg w-96">
         <h2 className="text-2xl font-bold text-white mb-6 text-center">Verify Your Email</h2>
-        
+
         <p className="text-gray-300 text-sm mb-6 text-center">
           We sent a 6-digit verification code to<br />
           <span className="font-semibold text-white">{email}</span>
@@ -130,10 +153,10 @@ function EmailVerification({ email, onVerified, onBack }) {
         <div className="mt-4 text-center">
           <button
             onClick={handleResend}
-            disabled={loading}
-            className="text-blue-400 hover:text-blue-300 text-sm disabled:text-gray-500"
+            disabled={loading || resendTimer > 0}
+            className="text-blue-400 hover:text-blue-300 text-sm disabled:text-gray-500 transition-colors"
           >
-            Resend Code
+            {resendTimer > 0 ? `Resend Code in ${resendTimer}s` : 'Resend Code'}
           </button>
         </div>
 
