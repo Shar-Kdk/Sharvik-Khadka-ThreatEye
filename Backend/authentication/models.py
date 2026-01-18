@@ -57,24 +57,16 @@ class Organization(models.Model):
         return self.get_user_count() < self.max_users
     
     def save(self, *args, **kwargs):
-        # Track if subscription tier changed
-        tier_changed = False
-        if self.pk:
-            old_instance = Organization.objects.get(pk=self.pk)
-            tier_changed = old_instance.subscription_tier != self.subscription_tier
-        
-        # Auto-set max_users based on subscription tier
-        # Only update if it's a new org OR tier changed
-        if self.pk is None or tier_changed:
-            if self.subscription_tier == self.TIER_NOT_SUBSCRIBED:
-                self.max_users = 1
-                self.is_active = False
-            elif self.subscription_tier == self.TIER_BASIC:
-                self.max_users = 5
-                self.is_active = True
-            elif self.subscription_tier == self.TIER_PROFESSIONAL:
-                self.max_users = 20
-                self.is_active = True
+        # Keep Organization state consistent with subscription tier.
+        if self.subscription_tier == self.TIER_NOT_SUBSCRIBED:
+            self.max_users = 1
+            self.is_active = False
+        elif self.subscription_tier == self.TIER_BASIC:
+            self.max_users = 5
+            self.is_active = True
+        elif self.subscription_tier == self.TIER_PROFESSIONAL:
+            self.max_users = 20
+            self.is_active = True
         
         super().save(*args, **kwargs)
 

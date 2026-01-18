@@ -10,6 +10,38 @@ from authentication.models import Organization, User
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
+
+def _downgrade_organization_if_unsubscribed(org):
+    """Keep organization fields consistent when no active subscription exists."""
+    if not org:
+        return
+
+    if (
+        org.subscription_tier != Organization.TIER_NOT_SUBSCRIBED
+        or org.is_active
+        or org.max_users != 1
+    ):
+        org.subscription_tier = Organization.TIER_NOT_SUBSCRIBED
+        org.is_active = False
+        org.max_users = 1
+        org.save(update_fields=['subscription_tier', 'is_active', 'max_users'])
+
+
+def _sync_expired_subscriptions(org=None):
+    """Expire overdue subscriptions and reflect the result on organization state."""
+    now = timezone.now()
+    active_subs = Subscription.objects.filter(status='active', end_date__isnull=False, end_date__lte=now)
+    if org:
+        active_subs = active_subs.filter(organization=org)
+
+    for sub in active_subs.select_related('organization'):
+        sub.status = 'expired'
+        sub.save(update_fields=['status', 'updated_at'])
+        _downgrade_organization_if_unsubscribed(sub.organization)
+
+    if org and not Subscription.objects.filter(organization=org, status='active').exists():
+        _downgrade_organization_if_unsubscribed(org)
+
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_plans(request):
@@ -125,6 +157,8 @@ def subscription_status(request):
     if not org:
         return Response({'status': 'none', 'error': 'No organization linked'})
 
+    _sync_expired_subscriptions(org=org)
+
     # Prioritize active subscription, otherwise get the most recent one
     sub = Subscription.objects.filter(organization=org, status='active').order_by('-created_at').first()
     if not sub:
@@ -145,6 +179,8 @@ def subscription_status(request):
 def get_platform_stats(request):
     if request.user.role != 'platform_owner':
         return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
+
+    _sync_expired_subscriptions()
     
     total_users = User.objects.count()
     total_orgs = Organization.objects.count()
@@ -202,6 +238,8 @@ def get_subscription_history(request):
     org = getattr(request.user, 'organization', None)
     if not org:
         return Response({'error': 'No organization linked'}, status=status.HTTP_403_FORBIDDEN)
+
+    _sync_expired_subscriptions(org=org)
     
     subscriptions = Subscription.objects.filter(organization=org).order_by('-created_at')
     

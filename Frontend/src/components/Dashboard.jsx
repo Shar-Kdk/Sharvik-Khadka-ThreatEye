@@ -6,6 +6,7 @@ import AdminOverview from '../pages/dashboard/AdminOverview';
 import OrganizationsList from '../pages/dashboard/OrganizationsList';
 import SubscriptionDetails from '../pages/dashboard/SubscriptionDetails';
 import SubscriptionHistory from '../pages/dashboard/SubscriptionHistory';
+import LiveTraffic from '../pages/dashboard/LiveTraffic';
 
 function Dashboard({ user, token, onLogout }) {
   const [subscription, setSubscription] = useState(null);
@@ -95,6 +96,7 @@ function Dashboard({ user, token, onLogout }) {
                 location.pathname === '/dashboard/organizations' ? 'Organizations' :
                     location.pathname === '/dashboard/subscription' ? 'Plan Management' :
                     location.pathname === '/dashboard/subscription/history' ? 'Subscription History' :
+                    location.pathname === '/dashboard/live-traffic' ? 'Live Traffic' :
                     'Overview'}
             </h1>
           </div>
@@ -105,6 +107,7 @@ function Dashboard({ user, token, onLogout }) {
               <>
                 <Route path="/" element={<AdminOverview token={token} />} />
                 <Route path="/organizations" element={<OrganizationsList token={token} />} />
+                <Route path="/live-traffic" element={<LiveTraffic token={token} />} />
               </>
             ) : (
               /* Regular User Routes */
@@ -112,6 +115,7 @@ function Dashboard({ user, token, onLogout }) {
                 <Route path="/" element={<Overview user={user} subscription={subscription} />} />
                  <Route path="/subscription" element={<SubscriptionDetails subscription={subscription} token={token} />} />
                  <Route path="/subscription/history" element={<SubscriptionHistory token={token} />} />
+                 <Route path="/live-traffic" element={<LiveTraffic token={token} />} />
               </>
             )}
           </Routes>

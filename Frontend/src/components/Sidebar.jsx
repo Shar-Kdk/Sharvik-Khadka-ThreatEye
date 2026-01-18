@@ -5,10 +5,12 @@ const Sidebar = ({ onLogout, isPlatformOwner }) => {
 
     const menuItems = isPlatformOwner ? [
         { name: 'Platform Overview', path: '/dashboard' },
-        { name: 'Organizations', path: '/dashboard/organizations' }
+        { name: 'Organizations', path: '/dashboard/organizations' },
+        { name: 'Live Traffic', path: '/dashboard/live-traffic' }
     ] : [
         { name: 'Overview', path: '/dashboard' },
-        { name: 'Subscription', path: '/dashboard/subscription' }
+        { name: 'Subscription', path: '/dashboard/subscription' },
+        { name: 'Live Traffic', path: '/dashboard/live-traffic' }
     ];
 
     return (

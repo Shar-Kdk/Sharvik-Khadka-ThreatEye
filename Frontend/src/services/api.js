@@ -47,3 +47,19 @@ export const getSubscriptionHistory = async (token) => {
   return response.json();
 };
 
+export const getLiveAlerts = async (token, limit = 100, signal) => {
+  const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+  const response = await fetch(`${BASE_URL}/api/alerts/live/?limit=${limit}`, {
+    signal,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch live alerts');
+  }
+
+  return response.json();
+};
+

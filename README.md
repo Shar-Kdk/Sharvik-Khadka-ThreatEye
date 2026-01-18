@@ -8,9 +8,10 @@ ThreatEye is a streamlined web platform designed for multi-tenant organization m
 
 ## 🎯 Project Scope
 
-The project focuses on two core pillars:
+The project focuses on three core pillars:
 1. **Identity & Access**: Secure authentication flow with mandatory email verification and role-based access control (Platform Owners vs. Organization Admins).
 2. **Subscription Management**: Complete Stripe integration for plan selection, payment processing, and automatic organization activation.
+3. **Live Traffic Monitoring**: Near real-time Snort log ingestion for alert and packet visibility.
 
 ### ✅ Core Features
 - **JWT Authentication**: Secure token-based sessions with 1-hour validity.
@@ -20,6 +21,13 @@ The project focuses on two core pillars:
 - **Multi-Tenancy**: Support for multiple organizations with distinct user capacity limits (Max Users).
 - **Admin Dashboard**: Specialized views for Platform Owners to manage all organizations and subscriptions.
 - **Plan Management**: Organization Admins can view current plans, renewal dates, and full billing history.
+- **Live Network Traffic Monitoring**: Real-time Snort ingestion and visualization with 5-second refresh.
+- **Alert + Packet Ingestion**: Reads `snort.alert.fast*` and `snort.log*` from the `snort_logs` folder.
+- **Threat Level Alerts (Priority-Based)**:
+   - **Priority 1 -> High (Red)**
+   - **Priority 2 -> Medium (Yellow)**
+   - **Priority 3 -> Safe (Green)**
+- **Live Table Pagination**: Dashboard traffic table supports pagination with a maximum of 50 rows per page.
 
 ---
 
@@ -48,6 +56,7 @@ ThreatEye/
 ├── Backend/
 │   ├── authentication/      # User models, Roles, and Email Verification
 │   ├── subscription/        # Stripe integration, Plans, and Payment logic
+│   ├── alerts/              # Snort log parsing, ingestion, and live traffic API
 │   ├── ThreatEye/           # Project settings & URL routing
 │   └── manage.py            # Django CLI
 └── Frontend/
@@ -110,15 +119,20 @@ ThreatEye/
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/subscriptions/plans/` | List available pricing tiers |
-| POST | `/subscriptions/pay/` | Initiate Stripe PaymentIntent |
+| POST | `/subscriptions/initiate/` | Initiate Stripe PaymentIntent |
 | POST | `/subscriptions/verify/` | Confirm payment & activate organization |
 | GET | `/subscriptions/status/` | Check active plan & renewal status |
+
+### Alerts & Live Traffic
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/alerts/live/?limit=100` | Fetch latest Snort alerts with threat levels (auto-ingests new logs) |
 
 ---
 
 ## 🔒 Security & Optimization
 - **Automatic Login**: Users are instantly logged in and redirected to the dashboard after successful email verification.
 - **Organization Safety**: Max user limits are enforced at the model level based on the subscription tier (Basic: 5, Professional: 20).
-- **Clean Architecture**: Removed all legacy network monitoring and threat analysis code to maintain a dedicated auth/billing service.
+- **Live Ingestion Safety**: Log readers track file offsets and deduplicate events before insert.
 
 ---
