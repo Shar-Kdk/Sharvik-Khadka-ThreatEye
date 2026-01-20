@@ -83,15 +83,23 @@ def initiate_payment(request):
         except stripe.error.StripeError as e:
             return Response({'error': f"Stripe Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Create/Update pending subscription
-
-        # Create a new pending subscription
-        sub = Subscription.objects.create(
+        # Create/Update pending subscription - use get_or_create to handle unique constraint
+        # If a subscription exists for this org, update it; otherwise create new
+        sub, created = Subscription.objects.get_or_create(
             organization=org,
-            plan=plan,
-            status='pending',
-            stripe_payment_intent_id=intent.id
+            defaults={
+                'plan': plan,
+                'status': 'pending',
+                'stripe_payment_intent_id': intent.id
+            }
         )
+        
+        # If subscription exists, update plan and payment intent
+        if not created:
+            sub.plan = plan
+            sub.status = 'pending'
+            sub.stripe_payment_intent_id = intent.id
+            sub.save()
 
         return Response({
             'clientSecret': intent.client_secret,

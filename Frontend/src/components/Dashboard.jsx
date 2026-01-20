@@ -112,7 +112,7 @@ function Dashboard({ user, token, onLogout }) {
             ) : (
               /* Regular User Routes */
               <>
-                <Route path="/" element={<Overview user={user} subscription={subscription} />} />
+                <Route path="/" element={<Overview user={user} subscription={subscription} token={token} />} />
                  <Route path="/subscription" element={<SubscriptionDetails subscription={subscription} token={token} />} />
                  <Route path="/subscription/history" element={<SubscriptionHistory token={token} />} />
                  <Route path="/live-traffic" element={<LiveTraffic token={token} />} />

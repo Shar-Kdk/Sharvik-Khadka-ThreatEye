@@ -1,6 +1,7 @@
 import React from 'react';
+import IdsAnalyticsSection from '../../components/dashboard/IdsAnalyticsSection';
 
-const Overview = ({ user, subscription }) => {
+const Overview = ({ user, subscription, token }) => {
     const formatDate = (dateString) => {
         if (!dateString) return 'Infinite';
         return new Date(dateString).toLocaleDateString('en-US', {
@@ -46,6 +47,8 @@ const Overview = ({ user, subscription }) => {
                     </div>
                 </div>
             </div>
+
+            <IdsAnalyticsSection token={token} />
 
             {/* Subscription Detail Section */}
             <div className="bg-[#0d1117] p-8 rounded-xl border border-[#30363d] shadow-sm">

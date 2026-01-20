@@ -10,16 +10,19 @@ const THREAT_STYLES = {
   high: 'bg-red-500/20 text-red-300 border border-red-400/30',
 };
 
-function formatEndpoint(ip, port) {
-  return port ? `${ip}:${port}` : ip;
-}
-
 function formatTimestamp(value) {
   try {
     return new Date(value).toLocaleString();
   } catch {
     return value;
   }
+}
+
+function formatPort(port) {
+  if (port === null || port === undefined) {
+    return '-';
+  }
+  return String(port);
 }
 
 export default function LiveTraffic({ token }) {
@@ -38,11 +41,13 @@ export default function LiveTraffic({ token }) {
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       try {
-        const payload = await getLiveAlerts(token, 500, controller.signal);
+        const livePayload = await getLiveAlerts(token, 500, controller.signal);
+
         if (!active) {
           return;
         }
-        setAlerts(payload.results || []);
+
+        setAlerts(livePayload.results || []);
         setError('');
         setLastSyncedAt(new Date());
       } catch (err) {
@@ -70,17 +75,6 @@ export default function LiveTraffic({ token }) {
       clearInterval(intervalId);
     };
   }, [token]);
-
-  const summary = useMemo(() => {
-    const counts = { safe: 0, medium: 0, high: 0 };
-    alerts.forEach((alert) => {
-      const level = alert.threat_level;
-      if (counts[level] !== undefined) {
-        counts[level] += 1;
-      }
-    });
-    return counts;
-  }, [alerts]);
 
   const totalPages = Math.max(1, Math.ceil(alerts.length / itemsPerPage));
 
@@ -110,15 +104,6 @@ export default function LiveTraffic({ token }) {
             Last sync: {lastSyncedAt ? lastSyncedAt.toLocaleTimeString() : 'Waiting...'}
           </p>
         </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
-          {Object.entries(summary).map(([level, count]) => (
-            <div key={level} className="bg-[#161b22] rounded-lg border border-[#30363d] px-4 py-3">
-              <p className="text-[11px] uppercase tracking-wider text-gray-400">{level}</p>
-              <p className="text-2xl font-bold text-white mt-1">{count}</p>
-            </div>
-          ))}
-        </div>
       </div>
 
       <div className="bg-[#0d1117] border border-[#30363d] rounded-xl overflow-hidden">
@@ -130,17 +115,17 @@ export default function LiveTraffic({ token }) {
         {isLoading ? (
           <div className="p-8 text-center text-gray-400">Loading live traffic...</div>
         ) : (
-          <div className="overflow-auto">
-            <table className="min-w-full text-sm">
+          <div className="overflow-x-hidden">
+            <table className="w-full table-fixed text-xs">
               <thead className="bg-[#161b22] text-gray-300 uppercase text-xs tracking-wider">
                 <tr>
-                  <th className="text-left px-4 py-3">Time</th>
-                  <th className="text-left px-4 py-3">Source</th>
-                  <th className="text-left px-4 py-3">Destination</th>
-                  <th className="text-left px-4 py-3">Protocol</th>
-                  <th className="text-left px-4 py-3">SID</th>
-                  <th className="text-left px-4 py-3">Message</th>
-                  <th className="text-left px-4 py-3">Threat</th>
+                  <th className="text-left px-3 py-3 w-[14%]">Time</th>
+                  <th className="text-left px-3 py-3 w-[17%]">Source</th>
+                  <th className="text-left px-3 py-3 w-[17%]">Destination</th>
+                  <th className="text-left px-3 py-3 w-[8%]">Protocol</th>
+                  <th className="text-left px-3 py-3 w-[9%]">SID</th>
+                  <th className="text-left px-3 py-3 w-[27%]">Message</th>
+                  <th className="text-left px-3 py-3 w-[8%]">Threat</th>
                 </tr>
               </thead>
               <tbody>
@@ -153,13 +138,19 @@ export default function LiveTraffic({ token }) {
                 )}
                 {paginatedAlerts.map((alert) => (
                   <tr key={alert.id} className="border-t border-[#222a35] hover:bg-[#111827]">
-                    <td className="px-4 py-3 whitespace-nowrap">{formatTimestamp(alert.timestamp)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">{formatEndpoint(alert.src_ip, alert.src_port)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap">{formatEndpoint(alert.dest_ip, alert.dest_port)}</td>
-                    <td className="px-4 py-3">{alert.protocol}</td>
-                    <td className="px-4 py-3">{alert.sid}</td>
-                    <td className="px-4 py-3 max-w-[420px] truncate" title={alert.message}>{alert.message}</td>
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3 align-top">{formatTimestamp(alert.timestamp)}</td>
+                    <td className="px-3 py-3 align-top">
+                      <div className="leading-tight break-all">{alert.src_ip}</div>
+                      <div className="text-[11px] text-gray-500">Port: {formatPort(alert.src_port)}</div>
+                    </td>
+                    <td className="px-3 py-3 align-top">
+                      <div className="leading-tight break-all">{alert.dest_ip}</div>
+                      <div className="text-[11px] text-gray-500">Port: {formatPort(alert.dest_port)}</div>
+                    </td>
+                    <td className="px-3 py-3 align-top">{alert.protocol}</td>
+                    <td className="px-3 py-3 align-top">{alert.sid}</td>
+                    <td className="px-3 py-3 align-top whitespace-normal break-words" title={alert.message}>{alert.message}</td>
+                    <td className="px-3 py-3 align-top">
                       <span className={`inline-block px-2 py-1 rounded text-[11px] font-semibold uppercase ${THREAT_STYLES[alert.threat_level] || THREAT_STYLES.safe}`}>
                         {alert.threat_level}
                       </span>

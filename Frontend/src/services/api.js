@@ -1,4 +1,5 @@
-const API_URL = `${import.meta.env.VITE_API_URL}/api`;
+const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+const API_URL = `${BASE_URL}/api`;
 
 export const login = async (email, password) => {
   const response = await fetch(`${API_URL}/auth/login/`, {
@@ -33,7 +34,6 @@ export const getProfile = async (token) => {
 };
 
 export const getSubscriptionHistory = async (token) => {
-  const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const response = await fetch(`${BASE_URL}/subscriptions/history/`, {
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -48,7 +48,6 @@ export const getSubscriptionHistory = async (token) => {
 };
 
 export const getLiveAlerts = async (token, limit = 100, signal) => {
-  const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const response = await fetch(`${BASE_URL}/api/alerts/live/?limit=${limit}`, {
     signal,
     headers: {
@@ -58,6 +57,66 @@ export const getLiveAlerts = async (token, limit = 100, signal) => {
 
   if (!response.ok) {
     throw new Error('Failed to fetch live alerts');
+  }
+
+  return response.json();
+};
+
+export const getThreatLevelDistribution = async (token, signal) => {
+  const response = await fetch(`${API_URL}/threat-level-distribution/`, {
+    signal,
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch threat level distribution');
+  }
+
+  return response.json();
+};
+
+export const getTopAttacks = async (token, signal) => {
+  const response = await fetch(`${API_URL}/top-attacks/`, {
+    signal,
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch top attacks');
+  }
+
+  return response.json();
+};
+
+export const getAlertsTimeline = async (token, signal) => {
+  const response = await fetch(`${API_URL}/alerts-timeline/`, {
+    signal,
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch alerts timeline');
+  }
+
+  return response.json();
+};
+
+export const getProtocolStatistics = async (token, signal) => {
+  const response = await fetch(`${API_URL}/protocol-statistics/`, {
+    signal,
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch protocol statistics');
   }
 
   return response.json();

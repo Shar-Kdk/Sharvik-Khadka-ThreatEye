@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 import socket
 import struct
@@ -10,6 +11,9 @@ from django.db import IntegrityError
 from django.utils import timezone
 
 from .models import Alert, LogIngestionState
+
+
+logger = logging.getLogger(__name__)
 
 
 FAST_ALERT_PATTERN = re.compile(
@@ -162,88 +166,101 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
 
     inserted = 0
     processed_packets = 0
+    failed_packets = 0
 
     for log_file in log_files:
         if max_packets is not None and processed_packets >= max_packets:
             break
 
-        file_path = str(log_file.resolve())
-        inode = _get_file_inode(log_file)
-        state, _ = LogIngestionState.objects.get_or_create(file_path=file_path)
+        try:
+            file_path = str(log_file.resolve())
+            inode = _get_file_inode(log_file)
+            state, _ = LogIngestionState.objects.get_or_create(file_path=file_path)
 
-        if state.inode != inode:
-            state.inode = inode
-            state.offset = 0
+            if state.inode != inode:
+                state.inode = inode
+                state.offset = 0
 
-        with log_file.open('rb') as handle:
-            global_header = handle.read(24)
-            endian, data_offset = _get_pcap_endian_and_data_offset(global_header)
-            if endian is None:
-                continue
-
-            file_size = log_file.stat().st_size
-            if state.offset == 0:
-                state.offset = data_offset
-            if state.offset < data_offset or state.offset > file_size:
-                state.offset = data_offset
-
-            handle.seek(state.offset)
-
-            while True:
-                if max_packets is not None and processed_packets >= max_packets:
-                    break
-
-                packet_header = handle.read(16)
-                if len(packet_header) < 16:
-                    break
-
-                try:
-                    ts_sec, ts_usec, incl_len, _orig_len = struct.unpack(f'{endian}IIII', packet_header)
-                except struct.error:
-                    break
-
-                packet_data = handle.read(incl_len)
-                if len(packet_data) < incl_len:
-                    break
-
-                processed_packets += 1
-                parsed_packet = _parse_ipv4_packet(packet_data)
-                if not parsed_packet:
+            with log_file.open('rb') as handle:
+                global_header = handle.read(24)
+                endian, data_offset = _get_pcap_endian_and_data_offset(global_header)
+                if endian is None:
                     continue
 
-                timestamp = timezone.make_aware(
-                    datetime.fromtimestamp(ts_sec + (ts_usec / 1_000_000.0)),
-                    timezone.get_current_timezone(),
-                )
+                file_size = log_file.stat().st_size
+                if state.offset == 0:
+                    state.offset = data_offset
+                if state.offset < data_offset or state.offset > file_size:
+                    state.offset = data_offset
 
-                hash_source = f"{file_path}:{ts_sec}:{ts_usec}:{parsed_packet['src_ip']}:{parsed_packet['dest_ip']}:{incl_len}"
-                event_hash = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
+                handle.seek(state.offset)
 
-                try:
-                    Alert.objects.create(
-                        timestamp=timestamp,
-                        src_ip=parsed_packet['src_ip'],
-                        src_port=parsed_packet['src_port'],
-                        dest_ip=parsed_packet['dest_ip'],
-                        dest_port=parsed_packet['dest_port'],
-                        protocol=parsed_packet['protocol'],
-                        sid='packet_capture',
-                        message='Real-time packet captured from snort.log',
-                        classification='Packet Log',
-                        priority=3,
-                        threat_level=Alert.THREAT_SAFE,
-                        raw_line=f"pcap:{file_path}:{ts_sec}.{ts_usec}:{parsed_packet['src_ip']}->{parsed_packet['dest_ip']}",
-                        event_hash=event_hash,
+                while True:
+                    if max_packets is not None and processed_packets >= max_packets:
+                        break
+
+                    packet_header = handle.read(16)
+                    if len(packet_header) < 16:
+                        break
+
+                    try:
+                        ts_sec, ts_usec, incl_len, _orig_len = struct.unpack(f'{endian}IIII', packet_header)
+                    except struct.error:
+                        break
+
+                    packet_data = handle.read(incl_len)
+                    if len(packet_data) < incl_len:
+                        break
+
+                    processed_packets += 1
+                    parsed_packet = _parse_ipv4_packet(packet_data)
+                    if not parsed_packet:
+                        continue
+
+                    timestamp = timezone.make_aware(
+                        datetime.fromtimestamp(ts_sec + (ts_usec / 1_000_000.0)),
+                        timezone.get_current_timezone(),
                     )
-                    inserted += 1
-                except IntegrityError:
-                    continue
 
-            state.offset = handle.tell()
+                    hash_source = f"{file_path}:{ts_sec}:{ts_usec}:{parsed_packet['src_ip']}:{parsed_packet['dest_ip']}:{incl_len}"
+                    event_hash = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
 
-        state.save(update_fields=['inode', 'offset', 'updated_at'])
+                    try:
+                        Alert.objects.create(
+                            timestamp=timestamp,
+                            src_ip=parsed_packet['src_ip'],
+                            src_port=parsed_packet['src_port'],
+                            dest_ip=parsed_packet['dest_ip'],
+                            dest_port=parsed_packet['dest_port'],
+                            protocol=parsed_packet['protocol'],
+                            sid='packet_capture',
+                            message='Real-time packet captured from snort.log',
+                            classification='Packet Log',
+                            priority=3,
+                            threat_level=Alert.THREAT_SAFE,
+                            raw_line=f"pcap:{file_path}:{ts_sec}.{ts_usec}:{parsed_packet['src_ip']}->{parsed_packet['dest_ip']}",
+                            event_hash=event_hash,
+                        )
+                        inserted += 1
+                    except IntegrityError:
+                        continue
+                    except Exception:
+                        failed_packets += 1
+                        logger.exception('Failed to store parsed packet from %s', file_path)
+                        continue
 
-    return {'inserted': inserted, 'processed_packets': processed_packets}
+                state.offset = handle.tell()
+
+            state.save(update_fields=['inode', 'offset', 'updated_at'])
+        except Exception:
+            logger.exception('Error while ingesting packet log file %s', log_file)
+            continue
+
+    return {
+        'inserted': inserted,
+        'processed_packets': processed_packets,
+        'failed_packets': failed_packets,
+    }
 
 
 def ingest_snort_logs(log_dir, max_lines=None):
@@ -258,61 +275,84 @@ def ingest_snort_logs(log_dir, max_lines=None):
 
     inserted = 0
     processed_lines = 0
+    failed_lines = 0
 
     for log_file in log_files:
         if max_lines is not None and processed_lines >= max_lines:
             break
 
-        file_path = str(log_file.resolve())
-        inode = _get_file_inode(log_file)
-        state, _ = LogIngestionState.objects.get_or_create(file_path=file_path)
+        try:
+            file_path = str(log_file.resolve())
+            inode = _get_file_inode(log_file)
+            state, _ = LogIngestionState.objects.get_or_create(file_path=file_path)
 
-        if state.inode != inode:
-            state.inode = inode
-            state.offset = 0
+            if state.inode != inode:
+                state.inode = inode
+                state.offset = 0
 
-        file_size = log_file.stat().st_size
-        if state.offset > file_size:
-            state.offset = 0
+            file_size = log_file.stat().st_size
+            if state.offset > file_size:
+                state.offset = 0
 
-        with log_file.open('r', encoding='utf-8', errors='ignore') as handle:
-            handle.seek(state.offset)
-            while True:
-                if max_lines is not None and processed_lines >= max_lines:
-                    break
+            with log_file.open('r', encoding='utf-8', errors='ignore') as handle:
+                handle.seek(state.offset)
+                while True:
+                    if max_lines is not None and processed_lines >= max_lines:
+                        break
 
-                line_start = handle.tell()
-                line = handle.readline()
-                if not line:
-                    break
+                    line_start = handle.tell()
+                    line = handle.readline()
+                    if not line:
+                        break
 
-                processed_lines += 1
-                parsed = parse_snort_fast_line(line)
-                if not parsed:
-                    continue
+                    processed_lines += 1
+                    parsed = parse_snort_fast_line(line)
+                    if not parsed:
+                        continue
 
-                hash_source = f'{file_path}:{line_start}:{line.strip()}'
-                event_hash = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
+                    hash_source = f'{file_path}:{line_start}:{line.strip()}'
+                    event_hash = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
 
-                try:
-                    Alert.objects.create(
-                        **parsed,
-                        raw_line=line.strip(),
-                        event_hash=event_hash,
-                    )
-                    inserted += 1
-                except IntegrityError:
-                    continue
+                    try:
+                        Alert.objects.create(
+                            **parsed,
+                            raw_line=line.strip(),
+                            event_hash=event_hash,
+                        )
+                        inserted += 1
+                    except IntegrityError:
+                        continue
+                    except Exception:
+                        failed_lines += 1
+                        logger.exception('Failed to store parsed alert line from %s', file_path)
+                        continue
 
-            state.offset = handle.tell()
+                state.offset = handle.tell()
 
-        state.save(update_fields=['inode', 'offset', 'updated_at'])
+            state.save(update_fields=['inode', 'offset', 'updated_at'])
+        except Exception:
+            logger.exception('Error while ingesting alert log file %s', log_file)
+            continue
 
-    return {'inserted': inserted, 'processed_lines': processed_lines}
+    return {
+        'inserted': inserted,
+        'processed_lines': processed_lines,
+        'failed_lines': failed_lines,
+    }
 
 
 def run_polling_loop(log_dir, interval_seconds=3):
     while True:
-        ingest_snort_logs(log_dir)
-        ingest_snort_packet_logs(log_dir)
-        time.sleep(interval_seconds)
+        try:
+            text_result = ingest_snort_logs(log_dir)
+            packet_result = ingest_snort_packet_logs(log_dir)
+
+            logger.info(
+                'Snort ingest cycle complete: text=%s packet=%s',
+                text_result,
+                packet_result,
+            )
+        except Exception:
+            logger.exception('Unhandled error in snort polling loop')
+
+        time.sleep(max(1, interval_seconds))

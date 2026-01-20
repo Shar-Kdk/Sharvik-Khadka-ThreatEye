@@ -7,6 +7,8 @@ import { useNavigate } from 'react-router-dom';
 const SubscriptionPlans = ({ token }) => {
     const [plans, setPlans] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState('');
+    const [selectError, setSelectError] = useState('');
     const [selectedPlan, setSelectedPlan] = useState(null);
     const [clientSecret, setClientSecret] = useState('');
     const [stripePromise, setStripePromise] = useState(null);
@@ -18,37 +20,62 @@ const SubscriptionPlans = ({ token }) => {
     }, []);
 
     const fetchPlans = async () => {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
         try {
+            setError('');
             const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-            const response = await fetch(`${API_BASE_URL}/subscriptions/plans/`, { headers });
+            const response = await fetch(`${API_BASE_URL}/subscriptions/plans/`, {
+                headers,
+                signal: controller.signal,
+            });
+
+            if (!response.ok) {
+                const text = await response.text();
+                throw new Error(text || `Failed to fetch plans (${response.status})`);
+            }
+
             if (response.ok) {
                 const data = await response.json();
                 setPlans(data);
             }
         } catch (error) {
             console.error('Error fetching plans:', error);
+            if (error.name === 'AbortError') {
+                setError('Request timed out while loading plans. Please retry.');
+            } else {
+                setError('Unable to load plans right now. Please retry.');
+            }
         } finally {
+            clearTimeout(timeoutId);
             setLoading(false);
         }
     };
 
     const handlePlanSelect = async (plan) => {
+        setSelectError('');
         try {
             if (!token) {
-                alert("Please login to subscribe");
+                setSelectError("Please login to subscribe");
                 return;
             }
 
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 20000);
             setLoading(true);
+
             const response = await fetch(`${API_BASE_URL}/subscriptions/initiate/`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${token}`
                 },
-                body: JSON.stringify({ plan_id: plan.id })
+                body: JSON.stringify({ plan_id: plan.id }),
+                signal: controller.signal,
             });
 
+            clearTimeout(timeoutId);
             const data = await response.json();
 
             if (response.ok) {
@@ -56,12 +83,16 @@ const SubscriptionPlans = ({ token }) => {
                 setClientSecret(data.clientSecret);
                 setSelectedPlan(plan);
             } else {
-                const errorMessage = data.error || data.detail || JSON.stringify(data);
-                alert(`Error: ${errorMessage}`);
+                const errorMessage = data.error || data.detail || 'Failed to initiate payment';
+                setSelectError(errorMessage);
             }
         } catch (error) {
             console.error('Error initiating payment:', error);
-            alert('Failed to contact payment server.');
+            if (error.name === 'AbortError') {
+                setSelectError('Payment initiation timed out. Please try again.');
+            } else {
+                setSelectError('Failed to contact payment server. Please check your connection and try again.');
+            }
         } finally {
             setLoading(false);
         }
@@ -113,6 +144,34 @@ const SubscriptionPlans = ({ token }) => {
 
                 {!selectedPlan ? (
                     <>
+                        {error && (
+                            <div className="bg-red-900/30 border border-red-500/40 text-red-200 rounded-md p-4 mb-6 flex items-center justify-between gap-3">
+                                <span>{error}</span>
+                                <button
+                                    onClick={() => {
+                                        setLoading(true);
+                                        fetchPlans();
+                                    }}
+                                    className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm"
+                                >
+                                    Retry
+                                </button>
+                            </div>
+                        )}
+
+                        {selectError && (
+                            <div className="bg-red-900/30 border border-red-500/40 text-red-200 rounded-md p-4 mb-6">
+                                <p className="font-semibold mb-2">Unable to select plan</p>
+                                <p className="text-sm mb-3">{selectError}</p>
+                                <button
+                                    onClick={() => setSelectError('')}
+                                    className="px-3 py-1.5 rounded-md bg-red-600 hover:bg-red-500 text-white text-sm"
+                                >
+                                    Dismiss
+                                </button>
+                            </div>
+                        )}
+
                         {plans.length === 0 ? (
                             <div className="text-center py-12">
                                 <p className="text-gray-400 mb-4">No subscription plans available at the moment.</p>

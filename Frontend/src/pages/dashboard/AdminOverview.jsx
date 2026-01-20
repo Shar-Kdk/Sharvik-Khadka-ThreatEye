@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import IdsAnalyticsSection from '../../components/dashboard/IdsAnalyticsSection';
 
 const AdminOverview = ({ token }) => {
     const [stats, setStats] = useState(null);
@@ -39,6 +40,8 @@ const AdminOverview = ({ token }) => {
                 <h2 className="text-xl font-bold text-white tracking-tight">Platform Performance</h2>
                 <p className="text-gray-400 text-sm mt-1">Live metrics fetched from the production database.</p>
             </div>
+
+            <IdsAnalyticsSection token={token} />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {cards.map((stat) => (
