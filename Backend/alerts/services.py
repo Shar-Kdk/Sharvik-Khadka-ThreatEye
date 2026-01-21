@@ -159,8 +159,9 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
     if not log_dir_path.exists() or not log_dir_path.is_dir():
         return {'inserted': 0, 'processed_packets': 0}
 
+    # Recursively find all packet log files (snort.log*)
     log_files = sorted(
-        [p for p in log_dir_path.glob('snort.log*') if p.is_file()],
+        [p for p in log_dir_path.rglob('snort.log*') if p.is_file() and not p.name.startswith('.')],
         key=lambda p: p.name,
     )
 
@@ -266,12 +267,17 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
 def ingest_snort_logs(log_dir, max_lines=None):
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
-        return {'inserted': 0, 'processed_lines': 0}
+        logger.warning(f'Log directory does not exist: {log_dir}')
+        return {'inserted': 0, 'processed_lines': 0, 'failed_lines': 0}
 
+    # Recursively find all alert files (snort.alert.fast* or alert_* patterns)
+    # Supports structure: real_logs/<year>/<month>/<day>/alert_*
     log_files = sorted(
-        [p for p in log_dir_path.glob('snort.alert.fast*') if p.is_file() and p.suffix != '.gz'],
+        [p for p in log_dir_path.rglob('*alert*') if p.is_file() and p.suffix != '.gz' and not p.name.startswith('.')],
         key=lambda p: p.name,
     )
+    
+    logger.debug(f'Found {len(log_files)} alert files in {log_dir}')
 
     inserted = 0
     processed_lines = 0
@@ -334,6 +340,7 @@ def ingest_snort_logs(log_dir, max_lines=None):
             logger.exception('Error while ingesting alert log file %s', log_file)
             continue
 
+    logger.info(f'Snort logs ingestion complete: inserted={inserted}, processed_lines={processed_lines}, failed={failed_lines}')
     return {
         'inserted': inserted,
         'processed_lines': processed_lines,

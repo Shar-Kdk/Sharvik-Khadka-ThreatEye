@@ -167,10 +167,17 @@ def subscription_status(request):
 
     _sync_expired_subscriptions(org=org)
 
-    # Prioritize active subscription, otherwise get the most recent one
-    sub = Subscription.objects.filter(organization=org, status='active').order_by('-created_at').first()
-    if not sub:
-        sub = Subscription.objects.filter(organization=org).order_by('-created_at').first()
+    # Get active subscription, with fallback to most recent subscription
+    sub = (
+        Subscription.objects.filter(organization=org, status='active')
+        .order_by('-created_at')
+        .first()
+    ) or (
+        Subscription.objects.filter(organization=org)
+        .order_by('-created_at')
+        .first()
+    )
+    
     if sub:
         return Response({
             'status': sub.status,
@@ -180,6 +187,7 @@ def subscription_status(request):
             'start_date': sub.start_date.isoformat() if sub.start_date else None,
             'end_date': sub.end_date.isoformat() if sub.end_date else None,
         })
+    
     return Response({'status': 'none'})
 
 @api_view(['GET'])

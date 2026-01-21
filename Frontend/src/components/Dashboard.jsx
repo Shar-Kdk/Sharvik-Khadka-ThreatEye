@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Overview from '../pages/dashboard/Overview';
@@ -11,11 +11,41 @@ import LiveTraffic from '../pages/dashboard/LiveTraffic';
 function Dashboard({ user, token, onLogout }) {
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const profileMenuRef = useRef(null);
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const location = useLocation();
 
   // Detect if user is the Platform Owner using the user object role
   const isPlatformOwner = user?.role === 'platform_owner';
+
+  /**
+   * Get page title based on current route
+   */
+  const getPageTitle = () => {
+    const pathToTitle = {
+      '/dashboard': isPlatformOwner ? 'Platform Overview' : 'General Overview',
+      '/dashboard/organizations': 'Organizations',
+      '/dashboard/subscription': 'Plan Management',
+      '/dashboard/subscription/history': 'Subscription History',
+      '/dashboard/live-traffic': 'Live Traffic',
+    };
+    
+    return pathToTitle[location.pathname] || 'Overview';
+  };
+
+  /**
+   * Get user display name from first/last name or email
+   */
+  const getUserDisplayName = () => {
+    if (user?.first_name && user?.last_name) {
+      return `${user.first_name} ${user.last_name}`;
+    }
+    if (user?.first_name) {
+      return user.first_name;
+    }
+    return user?.email?.split('@')[0] || 'User';
+  };
 
   useEffect(() => {
     const checkSubscription = async () => {
@@ -45,6 +75,20 @@ function Dashboard({ user, token, onLogout }) {
 
     checkSubscription();
   }, [token]);
+
+  // Close profile menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    if (showProfileMenu) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showProfileMenu]);
 
   if (loading) {
     return (
@@ -90,15 +134,52 @@ function Dashboard({ user, token, onLogout }) {
       {/* Main Content Area */}
       <main className="flex-grow p-10 overflow-auto">
         <div className="max-w-6xl mx-auto">
-          <div className="mb-10">
+          <div className="mb-10 flex items-center justify-between">
             <h1 className="text-2xl font-bold text-white tracking-tight capitalize">
-              {location.pathname === '/dashboard' ? (isPlatformOwner ? 'Platform Overview' : 'General Overview') :
-                location.pathname === '/dashboard/organizations' ? 'Organizations' :
-                    location.pathname === '/dashboard/subscription' ? 'Plan Management' :
-                    location.pathname === '/dashboard/subscription/history' ? 'Subscription History' :
-                    location.pathname === '/dashboard/live-traffic' ? 'Live Traffic' :
-                    'Overview'}
+              {getPageTitle()}
             </h1>
+
+            {/* Profile Button */}
+            <div className="relative" ref={profileMenuRef}>
+              <button
+                onClick={() => setShowProfileMenu(!showProfileMenu)}
+                className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-[#1f2937] hover:bg-[#2d3748] text-white border border-[#30363d] transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+                </svg>
+                <span className="text-sm font-medium hidden sm:inline">
+                  {getUserDisplayName()}
+                </span>
+              </button>
+
+              {/* Profile Dropdown Menu */}
+              {showProfileMenu && (
+                <div className="absolute right-0 mt-2 w-56 bg-[#0d1117] border border-[#30363d] rounded-lg shadow-xl z-50">
+                  <div className="px-4 py-3 border-b border-[#30363d]">
+                    <p className="text-sm font-medium text-white truncate">{user?.email}</p>
+                    <p className="text-xs text-gray-400 mt-1 truncate">
+                      {user?.organization?.name || 'Organization'}
+                    </p>
+                    <div className="mt-2 flex items-center space-x-1">
+                      <span className="text-xs text-gray-500">Role:</span>
+                      <span className="text-xs font-semibold text-blue-400 capitalize">
+                        {user?.role?.replace('_', ' ') || 'Member'}
+                      </span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={onLogout}
+                    className="w-full text-left px-4 py-2.5 text-sm text-red-400 hover:bg-[#161b22] hover:text-red-300 transition-colors flex items-center space-x-2"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                    </svg>
+                    <span>Logout</span>
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
 
           <Routes>

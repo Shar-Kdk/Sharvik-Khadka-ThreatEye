@@ -3,6 +3,7 @@ import { getLiveAlerts } from '../../services/api';
 import Pagination from '../../components/common/Pagination';
 
 const MAX_ROWS_PER_PAGE = 50;
+const MAX_ITEMS_PER_PAGE = 500;
 
 const THREAT_STYLES = {
   safe: 'bg-green-500/20 text-green-300 border border-green-400/30',
@@ -96,9 +97,11 @@ export default function LiveTraffic({ token }) {
         <div className="flex flex-wrap gap-3 items-center justify-between">
           <div>
             <h2 className="text-white text-lg font-bold">Live Network Traffic</h2>
-            <p className="text-sm text-gray-400 mt-1">
-              Auto-refresh every 5 seconds from Snort alerts.
-            </p>
+            <div className="flex gap-4 mt-2">
+              <p className="text-sm text-gray-300">
+                <span className="font-semibold text-blue-400">{alerts.length}</span> alerts detected
+              </p>
+            </div>
           </div>
           <p className="text-xs text-gray-500">
             Last sync: {lastSyncedAt ? lastSyncedAt.toLocaleTimeString() : 'Waiting...'}
@@ -168,10 +171,10 @@ export default function LiveTraffic({ token }) {
             currentPage={currentPage}
             onPageChange={setCurrentPage}
             onItemsPerPageChange={(value) => {
-              setItemsPerPage(Math.min(MAX_ROWS_PER_PAGE, value));
+              setItemsPerPage(Math.min(MAX_ITEMS_PER_PAGE, value));
               setCurrentPage(1);
             }}
-            itemsPerPageOptions={[10, 20, 50]}
+            itemsPerPageOptions={[10, 25, 50, 100, 200, 500]}
           />
         )}
       </div>

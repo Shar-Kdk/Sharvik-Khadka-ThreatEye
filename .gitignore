@@ -136,7 +136,7 @@ $RECYCLE.BIN/
 # Packet Captures (ThreatEye specific)
 # ====================================
 # Local Snort runtime logs (alert + packet capture outputs)
-/snort_logs/
+/real_logs/
 
 # Uncomment when packet capture starts:
 # *.pcap

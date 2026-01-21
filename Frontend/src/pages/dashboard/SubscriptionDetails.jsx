@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 
-const SubscriptionDetails = ({ subscription }) => {
+const SubscriptionDetails = ({ subscription, token }) => {
     const formatDate = (dateString) => {
         if (!dateString) return 'Infinite';
         return new Date(dateString).toLocaleDateString('en-US', {

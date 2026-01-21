@@ -1,6 +1,18 @@
 const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 const API_URL = `${BASE_URL}/api`;
 
+/**
+ * Extract the first available error message from API response data
+ * @param {Object} data - Response data from server
+ * @returns {string} Error message
+ */
+function extractErrorMessage(data) {
+  if (data.email?.[0]) return data.email[0];
+  if (data.password?.[0]) return data.password[0];
+  if (data.non_field_errors?.[0]) return data.non_field_errors[0];
+  return 'An error occurred';
+}
+
 export const login = async (email, password) => {
   const response = await fetch(`${API_URL}/auth/login/`, {
     method: 'POST',
@@ -13,7 +25,7 @@ export const login = async (email, password) => {
   const data = await response.json();
 
   if (!response.ok) {
-    throw new Error(data.email?.[0] || data.password?.[0] || data.non_field_errors?.[0] || 'Login failed');
+    throw new Error(extractErrorMessage(data) || 'Login failed');
   }
 
   return data;

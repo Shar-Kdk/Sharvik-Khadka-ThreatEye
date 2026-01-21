@@ -195,5 +195,5 @@ STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 
 # Snort ingestion configuration
-SNORT_LOG_DIR = os.environ.get('SNORT_LOG_DIR', str(BASE_DIR.parent / 'snort_logs'))
+SNORT_LOG_DIR = os.environ.get('SNORT_LOG_DIR', str(BASE_DIR.parent / 'real_logs'))
 SNORT_POLL_INTERVAL_SECONDS = int(os.environ.get('SNORT_POLL_INTERVAL_SECONDS', '3'))

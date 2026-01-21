@@ -12,36 +12,29 @@ function App() {
   const [token, setToken] = useState(null);
   const [showVerification, setShowVerification] = useState(false);
 
+  /**
+   * Clear all auth state
+   */
+  const clearAuthState = () => {
+    setUser(null);
+    setToken(null);
+    setShowVerification(false);
+  };
+
   const handleLoginSuccess = (data) => {
     setUser(data.user);
     setToken(data.token);
-
-    // Update verification state
-    if (!data.user.is_verified) {
-      setShowVerification(true);
-    } else {
-      setShowVerification(false);
-    }
+    setShowVerification(!data.user.is_verified);
   };
 
   const handleVerified = (data) => {
-    // Update user's verification status and token
     setUser(data.user);
     setToken(data.token);
     setShowVerification(false);
   };
 
-  const handleBackToLogin = () => {
-    setUser(null);
-    setToken(null);
-    setShowVerification(false);
-  };
-
-  const handleLogout = () => {
-    setUser(null);
-    setToken(null);
-    setShowVerification(false);
-  };
+  const handleBackToLogin = clearAuthState;
+  const handleLogout = clearAuthState;
 
   return (
     <Router>

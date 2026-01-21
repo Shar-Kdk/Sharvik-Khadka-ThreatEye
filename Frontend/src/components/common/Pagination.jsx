@@ -42,17 +42,7 @@ const Pagination = ({
     };
 
     return (
-        <div className="p-4 border-t border-[#30363d] bg-[#161b22]/30 flex flex-col md:flex-row items-center justify-between gap-4">
-            {/* Left: Total Items */}
-            <div className="flex items-center space-x-2">
-                <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">
-                    Total Records:
-                </span>
-                <span className="text-xs font-bold text-blue-400 tabular-nums">
-                    {totalItems}
-                </span>
-            </div>
-
+        <div className="p-4 border-t border-[#30363d] bg-[#161b22]/30 flex items-center justify-center">
             {/* Center: Pagination Controls */}
             <div className="flex items-center space-x-2">
                 <button
@@ -80,33 +70,6 @@ const Pagination = ({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
                     </svg>
                 </button>
-            </div>
-
-            {/* Right: Items Per Page */}
-            <div className="flex items-center space-x-3">
-                <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest whitespace-nowrap">
-                    Show per Page:
-                </span>
-                <select
-                    value={itemsPerPage}
-                    onChange={(e) => onItemsPerPageChange(Number(e.target.value))}
-                    className="bg-[#0d1117] border border-[#30363d] text-gray-300 text-[10px] font-bold rounded-md px-2 py-1 focus:outline-none focus:border-blue-500 transition-colors cursor-pointer appearance-none pr-6 relative"
-                    style={{
-                        backgroundImage: `url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%236e7681'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E")`,
-                        backgroundRepeat: 'no-repeat',
-                        backgroundPosition: 'right 0.5rem center',
-                        backgroundSize: '0.75rem'
-                    }}
-                >
-                    {itemsPerPageOptions.map(option => (
-                        <option key={option} value={option}>
-                            {option}
-                        </option>
-                    ))}
-                </select>
-                <span className="text-[10px] text-gray-500 uppercase font-black tracking-widest">
-                    Page {currentPage} of {totalPages || 1}
-                </span>
             </div>
         </div>
     );
