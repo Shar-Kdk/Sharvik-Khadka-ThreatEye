@@ -122,15 +122,16 @@ $RECYCLE.BIN/
 # ====================================
 # ML Models & Data (ThreatEye specific)
 # ====================================
-# Uncomment when ML phase starts:
-# *.pkl
-# *.joblib
-# *.h5
-# *.hdf5
-# /models/*.pkl
-# /data/raw/
-# /data/processed/
-# /datasets/
+# Trained models (tracked for production deployment)
+!/Backend/trained_models/*.joblib
+# Training datasets (excluded for size)
+/dataset/
+# Intermediate model formats
+*.pkl
+*.h5
+*.hdf5
+/data/raw/
+/data/processed/
 
 # ====================================
 # Packet Captures (ThreatEye specific)
