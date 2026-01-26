@@ -1,18 +1,20 @@
+/**
+ * API service - All backend API calls for ThreatEye frontend
+ * Handles authentication, alerts, subscriptions, and statistics
+ */
+
 const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
 const API_URL = `${BASE_URL}/api`;
 
-/**
- * Extract the first available error message from API response data
- * @param {Object} data - Response data from server
- * @returns {string} Error message
- */
 function extractErrorMessage(data) {
+  // Extract error from API response
   if (data.email?.[0]) return data.email[0];
   if (data.password?.[0]) return data.password[0];
   if (data.non_field_errors?.[0]) return data.non_field_errors[0];
   return 'An error occurred';
 }
 
+// Login with email and password, returns user data and JWT token
 export const login = async (email, password) => {
   const response = await fetch(`${API_URL}/auth/login/`, {
     method: 'POST',
@@ -31,6 +33,7 @@ export const login = async (email, password) => {
   return data;
 };
 
+// Get currently logged-in user's profile
 export const getProfile = async (token) => {
   const response = await fetch(`${API_URL}/auth/profile/`, {
     headers: {
@@ -45,6 +48,7 @@ export const getProfile = async (token) => {
   return response.json();
 };
 
+// Get user's past subscription history (list of previous plans)
 export const getSubscriptionHistory = async (token) => {
   const response = await fetch(`${BASE_URL}/subscriptions/history/`, {
     headers: {
@@ -59,6 +63,7 @@ export const getSubscriptionHistory = async (token) => {
   return response.json();
 };
 
+// Get real-time security alerts from Snort IDS
 export const getLiveAlerts = async (token, limit = 100, signal) => {
   const response = await fetch(`${BASE_URL}/api/alerts/live/?limit=${limit}`, {
     signal,
@@ -74,6 +79,7 @@ export const getLiveAlerts = async (token, limit = 100, signal) => {
   return response.json();
 };
 
+// Get count of alerts by threat level (safe, medium, high) for chart
 export const getThreatLevelDistribution = async (token, signal) => {
   const response = await fetch(`${API_URL}/threat-level-distribution/`, {
     signal,
@@ -89,6 +95,7 @@ export const getThreatLevelDistribution = async (token, signal) => {
   return response.json();
 };
 
+// Get top 5 most common attack types
 export const getTopAttacks = async (token, signal) => {
   const response = await fetch(`${API_URL}/top-attacks/`, {
     signal,
@@ -104,6 +111,7 @@ export const getTopAttacks = async (token, signal) => {
   return response.json();
 };
 
+// Get alerts grouped by time for timeline chart (shows attack frequency over time)
 export const getAlertsTimeline = async (token, signal) => {
   const response = await fetch(`${API_URL}/alerts-timeline/`, {
     signal,
@@ -119,6 +127,7 @@ export const getAlertsTimeline = async (token, signal) => {
   return response.json();
 };
 
+// Get network protocol distribution (TCP, UDP, ICMP usage percentages)
 export const getProtocolStatistics = async (token, signal) => {
   const response = await fetch(`${API_URL}/protocol-statistics/`, {
     signal,

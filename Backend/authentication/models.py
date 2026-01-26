@@ -7,7 +7,13 @@ from django.core.exceptions import ValidationError
 
 
 class Organization(models.Model):
+    """
+    Represents a customer organization in ThreatEye.
+    Organizations have subscription tiers that control max users and features.
+    Multi-tenant: each organization is isolated from others.
+    """
     
+    # Subscription tier options - controls features and user limits
     TIER_NOT_SUBSCRIBED = 'not_subscribed'
     TIER_BASIC = 'basic'
     TIER_PROFESSIONAL = 'professional'
@@ -72,8 +78,12 @@ class Organization(models.Model):
 
 
 class UserManager(BaseUserManager):
+    """
+    Custom user manager for Django authentication using email instead of username.
+    """
     
     def create_user(self, email, password=None, **extra_fields):
+        # Create regular user account
         if not email:
             raise ValueError("Email is required")
 
@@ -84,6 +94,7 @@ class UserManager(BaseUserManager):
         return user
 
     def create_superuser(self, email, password=None, **extra_fields):
+        # Create admin/superuser account
         extra_fields.setdefault('is_staff', True)
         extra_fields.setdefault('is_superuser', True)
         extra_fields.setdefault('is_active', True)
@@ -99,7 +110,13 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractUser):
+    """
+    Custom user model for ThreatEye.
+    Uses email as username. Has roles (Platform Owner vs Organization Admin).
+    Email verification required before account is active.
+    """
     
+    # User role options in the system
     PLATFORM_OWNER = 'platform_owner'
     ORG_ADMIN = 'org_admin'
     
@@ -108,15 +125,21 @@ class User(AbstractUser):
         (ORG_ADMIN, 'Organization Admin'),
     ]
     
+    # Remove default Django username field - we use email instead
     username = None
     
+    # Email is the unique identifier for login
     email = models.EmailField(unique=True, help_text="User's email address for authentication")
+    
+    # User's role - Platform Owner (system admin) or Org Admin (organization manager)
     role = models.CharField(
         max_length=20,
         choices=ROLE_CHOICES,
         default=ORG_ADMIN,
         help_text="User's role in the system"
     )
+    
+    # Organization this user belongs to (null if Platform Owner)
     organization = models.ForeignKey(
         Organization,
         on_delete=models.CASCADE,

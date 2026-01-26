@@ -2,6 +2,11 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { login } from '../services/api';
 
+/**
+ * Login component - User authentication form
+ * Takes email/password, calls API to authenticate
+ * On success: redirects to email verification or dashboard
+ */
 function Login({ onLoginSuccess }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');

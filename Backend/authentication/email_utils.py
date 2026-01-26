@@ -1,30 +1,29 @@
-"""Email Utilities for Authentication
+"""
+Email utilities for sending verification emails.
 
-This module handles sending verification emails to users with HTML formatting.
-Uses Django's EmailMultiAlternatives to send both plain text and HTML versions.
+Sends HTML-formatted email verification codes to users during registration.
+Uses background threading to avoid blocking the API response.
 """
 
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
-
-
 import threading
 
 def _send_email_async(msg):
-    """Helper to send email in background thread"""
+    # Send email in background thread (avoids SMTP latency blocking API)
     try:
         msg.send()
     except Exception as e:
         print(f"Background email sending failed: {str(e)}")
 
 def send_verification_email(user):
-    # Always generate a fresh code for security and to reset the 5-minute timer
-    # This prevents users from getting stuck with an expired code when clicking "Resend"
+    # Generate 6-digit code, send HTML email in background thread
+    # Always generate fresh code to reset 5-minute expiry timer
     verification_code = user.generate_verification_code()
     
     subject = '🔐 ThreatEye - Verify Your Email'
     
-    # Plain text version (fallback)
+    # Plain text version (fallback for email clients that don't support HTML)
     text_content = f"""
 Hello {user.first_name or 'User'},
 
@@ -40,7 +39,7 @@ Best regards,
 ThreatEye Security Team
     """
     
-    # HTML version (styled)
+    # HTML version (styled for modern email clients)
     html_content = f"""
     <!DOCTYPE html>
     <html>
@@ -124,16 +123,19 @@ ThreatEye Security Team
     
     try:
         # Create email message with both text and HTML versions
+        # EmailMultiAlternatives allows multiple content types (text + HTML)
         msg = EmailMultiAlternatives(
             subject,
-            text_content,  # Plain text fallback
+            text_content,  # Plain text fallback for basic email clients
             settings.DEFAULT_FROM_EMAIL,
             [user.email]
         )
+        # Attach HTML version as alternative (takes priority if supported)
         msg.attach_alternative(html_content, "text/html")
         
         # Start a background thread to send the email
-        # This prevents the SMTP connection time (handshake) from blocking the user's API request
+        # This prevents SMTP connection latency (1-2 seconds) from blocking the user's API request
+        # User gets immediate API response while email sends in background
         thread = threading.Thread(target=_send_email_async, args=(msg,))
         thread.start()
         

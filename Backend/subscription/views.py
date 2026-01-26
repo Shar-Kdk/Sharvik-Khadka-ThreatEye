@@ -51,13 +51,10 @@ def get_plans(request):
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def initiate_payment(request):
-    """
-    Creates a Stripe PaymentIntent and a pending subscription.
-    """
+    """Create Stripe PaymentIntent and pending subscription."""
     try:
         plan_id = request.data.get('plan_id')
         user = request.user
-        
         org = user.organization
         if not org:
             return Response({'error': 'User does not belong to any organization.'}, status=status.HTTP_403_FORBIDDEN)
@@ -67,13 +64,13 @@ def initiate_payment(request):
         except SubscriptionPlan.DoesNotExist:
             return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        # Create the PaymentIntent
-        amount = int(plan.price * 100) 
+        amount = int(plan.price * 100)
         
+        # Create the PaymentIntent
         try:
             intent = stripe.PaymentIntent.create(
                 amount=amount,
-                currency='usd', # Using USD as it's more widely supported for test accounts
+                currency='usd',
                 metadata={
                     'org_id': org.id,
                     'plan_id': plan.id,
@@ -83,8 +80,7 @@ def initiate_payment(request):
         except stripe.error.StripeError as e:
             return Response({'error': f"Stripe Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
         
-        # Create/Update pending subscription - use get_or_create to handle unique constraint
-        # If a subscription exists for this org, update it; otherwise create new
+        # Create/Update pending subscription
         sub, created = Subscription.objects.get_or_create(
             organization=org,
             defaults={

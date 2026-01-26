@@ -1,19 +1,29 @@
 import { useState, useEffect } from 'react';
-import { getProtocolStatistics, getLiveAlerts } from '../../services/api';
+import { getProtocolStatistics, getThreatLevelDistribution } from '../../services/api';
 
+/**
+ * Overview page - Dashboard showing alert statistics
+ * Displays: protocol distribution, threat levels, recent alerts
+ * Auto-refreshes every 8 seconds to show real-time data
+ * Can also show minimal profile icon mode (showOnlyIcon=true)
+ */
 const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
     const [showProfilePopup, setShowProfilePopup] = useState(false);
+    // Track protocol statistics (TCP, UDP, ICMP counts)
     const [protocolStats, setProtocolStats] = useState([]);
     const [protocolLoading, setProtocolLoading] = useState(false);
+    // Track threat level counts (safe, medium, high)
     const [threatStats, setThreatStats] = useState({});
     const [threatLoading, setThreatLoading] = useState(false);
 
+    // Fetch protocol statistics every 8 seconds (auto-refresh)
     useEffect(() => {
         if (!token || showOnlyIcon) return;
         
         let isActive = true;
         let interval = null;
         
+        // Fetch protocol stats from API
         const fetchProtocolStats = async () => {
             if (!isActive) return;
             setProtocolLoading(true);
@@ -52,20 +62,18 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
             if (!isActive) return;
             setThreatLoading(true);
             try {
-                const alerts = await getLiveAlerts(token, 500);
+                const data = await getThreatLevelDistribution(token);
                 if (!isActive) return;
                 
-                const results = alerts.results || [];
-                
                 const counts = { safe: 0, medium: 0, high: 0 };
-                results.forEach(alert => {
-                    const level = alert.threat_level?.toLowerCase().trim() || '';
+                (data.results || []).forEach(item => {
+                    const level = item.threat_level?.toLowerCase().trim() || '';
                     if (level === 'safe') {
-                        counts.safe++;
+                        counts.safe = item.count;
                     } else if (level === 'medium') {
-                        counts.medium++;
+                        counts.medium = item.count;
                     } else if (level === 'high') {
-                        counts.high++;
+                        counts.high = item.count;
                     }
                 });
                 
@@ -140,7 +148,6 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
 
     return (
         <div className="space-y-6">
-            {/* US009: Packet Classification */}
             <div className="bg-[#0d1117] border border-[#30363d] rounded-xl p-6">
                 <h2 className="text-white text-lg font-bold mb-4">Packet Classification</h2>
                 <p className="text-sm text-gray-400 mb-4">Traffic categorization based on Snort alert priority</p>
@@ -175,7 +182,6 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
                 )}
             </div>
 
-            {/* US010: Protocol Statistics */}
             <div className="bg-[#0d1117] border border-[#30363d] rounded-xl p-6">
                 <h2 className="text-white text-lg font-bold mb-4">Protocol Statistics</h2>
                 <p className="text-sm text-gray-400 mb-4">Distribution of network protocols in captured traffic</p>

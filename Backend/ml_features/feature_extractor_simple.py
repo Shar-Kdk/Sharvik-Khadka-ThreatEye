@@ -7,7 +7,10 @@ Training time: ~5 minutes (vs 2 hours for CIC-IDS17)
 import numpy as np
 import ipaddress
 import re
+import logging
 from typing import List, Dict, Tuple
+
+logger = logging.getLogger(__name__)
 
 
 class SimplifiedFeatureExtractor:
@@ -116,6 +119,7 @@ class SimplifiedFeatureExtractor:
     def extract_features(self, alert: Dict) -> np.ndarray:
         """
         Extract 12 simplified features from a single Snort alert.
+        Defensive: Never raises exceptions, returns safe defaults on bad data
 
         Args:
             alert: Dictionary with keys:
@@ -131,46 +135,96 @@ class SimplifiedFeatureExtractor:
         Returns:
             numpy array of shape (12,) with normalized features
         """
-        features = []
+        try:
+            if not isinstance(alert, dict):
+                logger.warning(f"Extract_features received non-dict: {type(alert)}, returning safe defaults")
+                return np.zeros(12, dtype=np.float32)
+            
+            features = []
 
-        # 1. Destination port (normalized)
-        dest_port = alert.get('dest_port')
-        features.append(self._normalize_port(dest_port))
+            # Destination port (normalized)
+            try:
+                dest_port = alert.get('dest_port')
+                features.append(self._normalize_port(dest_port))
+            except Exception as e:
+                logger.debug(f"Error extracting dest_port: {e}")
+                features.append(0.0)
 
-        # 2. Source port (normalized)
-        src_port = alert.get('src_port')
-        features.append(self._normalize_port(src_port))
+            # Source port (normalized)
+            try:
+                src_port = alert.get('src_port')
+                features.append(self._normalize_port(src_port))
+            except Exception as e:
+                logger.debug(f"Error extracting src_port: {e}")
+                features.append(0.0)
 
-        # 3. Protocol (encoded)
-        protocol = alert.get('protocol', '')
-        features.append(self._encode_protocol(protocol))
+            # Protocol (encoded)
+            try:
+                protocol = alert.get('protocol', '')
+                features.append(self._encode_protocol(protocol))
+            except Exception as e:
+                logger.debug(f"Error encoding protocol: {e}")
+                features.append(0)
 
-        # 4. Threat level (encoded)
-        threat_level = alert.get('threat_level', 'safe')
-        features.append(self._encode_threat_level(threat_level))
+            # Threat level (encoded)
+            try:
+                threat_level = alert.get('threat_level', 'safe')
+                features.append(self._encode_threat_level(threat_level))
+            except Exception as e:
+                logger.debug(f"Error encoding threat_level: {e}")
+                features.append(1)
 
-        # 5. SID (normalized)
-        sid = alert.get('sid', '0')
-        features.append(self._normalize_sid(sid))
+            # SID (normalized)
+            try:
+                sid = alert.get('sid', '0')
+                features.append(self._normalize_sid(sid))
+            except Exception as e:
+                logger.debug(f"Error normalizing SID: {e}")
+                features.append(0.0)
 
-        # 6-10. TCP flags (FIN, RST, PSH, ACK, URG)
-        message = alert.get('message', '')
-        fin, rst, psh, ack, urg = self._extract_tcp_flags(message)
-        features.extend([fin, rst, psh, ack, urg])
+            # TCP flags (FIN, RST, PSH, ACK, URG)
+            try:
+                message = alert.get('message', '')
+                fin, rst, psh, ack, urg = self._extract_tcp_flags(message)
+                features.extend([fin, rst, psh, ack, urg])
+            except Exception as e:
+                logger.debug(f"Error extracting TCP flags: {e}")
+                features.extend([0, 0, 0, 0, 0])
 
-        # 11. Source IP is internal
-        src_ip = alert.get('src_ip', '')
-        features.append(self._is_internal_ip(src_ip))
+            # Source IP is internal
+            try:
+                src_ip = alert.get('src_ip', '')
+                features.append(self._is_internal_ip(src_ip))
+            except Exception as e:
+                logger.debug(f"Error checking src_ip: {e}")
+                features.append(0)
 
-        # 12. Destination IP is internal
-        dest_ip = alert.get('dest_ip', '')
-        features.append(self._is_internal_ip(dest_ip))
+            # Destination IP is internal
+            try:
+                dest_ip = alert.get('dest_ip', '')
+                features.append(self._is_internal_ip(dest_ip))
+            except Exception as e:
+                logger.debug(f"Error checking dest_ip: {e}")
+                features.append(0)
 
-        return np.array(features, dtype=np.float32)
+            result = np.array(features, dtype=np.float32)
+            
+            if result.shape != (12,):
+                logger.warning(f"Feature extraction resulted in shape {result.shape}, padding/trimming to (12,)")
+                result_safe = np.zeros(12, dtype=np.float32)
+                result_safe[:min(len(result), 12)] = result[:min(len(result), 12)]
+                result = result_safe
+            
+            return result
+
+        except Exception as e:
+            logger.error(f"Unexpected error in extract_features: {e}, returning safe defaults")
+            return np.zeros(12, dtype=np.float32)
 
     def extract_features_batch(self, alerts: List[Dict]) -> np.ndarray:
         """
         Extract features from multiple alerts.
+        Defensive: Handles bad alerts gracefully without breaking pipeline
 
         Args:
             alerts: List of alert dictionaries
@@ -178,12 +232,36 @@ class SimplifiedFeatureExtractor:
         Returns:
             numpy array of shape (n_alerts, 12) with normalized features
         """
+        if not alerts:
+            return np.zeros((0, 12), dtype=np.float32)
+        
+        if not isinstance(alerts, (list, tuple)):
+            logger.warning(f"extract_features_batch received non-list: {type(alerts)}")
+            return np.zeros((0, 12), dtype=np.float32)
+        
         features_list = []
-        for alert in alerts:
-            features = self.extract_features(alert)
-            features_list.append(features)
-
-        return np.array(features_list, dtype=np.float32)
+        error_count = 0
+        
+        for i, alert in enumerate(alerts):
+            try:
+                features = self.extract_features(alert)
+                features_list.append(features)
+            except Exception as e:
+                error_count += 1
+                logger.warning(f"Error extracting features from alert {i}: {e}, using safe defaults")
+                features_list.append(np.zeros(12, dtype=np.float32))
+        
+        if error_count > 0:
+            logger.warning(f"Batch extraction completed with {error_count}/{len(alerts)} errors")
+        
+        result = np.array(features_list, dtype=np.float32)
+        
+        if result.shape[1:] != (12,):
+            logger.error(f"Batch result has unexpected shape {result.shape}, padding to correct shape")
+            if len(result.shape) == 1:
+                result = np.atleast_2d(result)
+        
+        return result
 
     @staticmethod
     def get_feature_names() -> List[str]:

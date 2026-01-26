@@ -16,18 +16,21 @@ The project focuses on three core pillars:
 ### ✅ Core Features
 - **JWT Authentication**: Secure token-based sessions with 1-hour validity.
 - **Email Verification**: Mandatory 6-digit verification codes sent via SMTP (Gmail).
+- **Enhanced Authentication**: Multi-field user profiles with organization-level permissions.
 - **Stripe Integration**: Real-time payment processing for Professional and Basic plans.
 - **Auto-Activation**: Organizations are automatically marked as `Active` and their `subscription_tier` is updated instantly upon successful Stripe payment.
-- **Multi-Tenancy**: Support for multiple organizations with distinct user capacity limits (Max Users).
+- **Multi-Tenancy**: Support for multiple organizations with distinct user capacity limits (Max Users) and isolated data access.
 - **Admin Dashboard**: Specialized views for Platform Owners to manage all organizations and subscriptions.
 - **Plan Management**: Organization Admins can view current plans, renewal dates, and full billing history.
 - **Live Network Traffic Monitoring**: Real-time Snort ingestion and visualization with 5-second refresh.
-- **Alert + Packet Ingestion**: Reads `snort.alert.fast*` and `snort.log*` from the `snort_logs` folder.
+- **Alert + Packet Ingestion**: Reads `snort.alert.fast*` and `snort.log*` from `real_logs` directory with resumable ingestion.
 - **Threat Level Alerts (Priority-Based)**:
    - **Priority 1 -> High (Red)**
    - **Priority 2 -> Medium (Yellow)**
    - **Priority 3 -> Safe (Green)**
 - **Live Table Pagination**: Dashboard traffic table supports pagination with a maximum of 50 rows per page.
+- **ML-Based Threat Classification**: Random Forest model for real-time attack detection and threat scoring.
+- **Defensive Data Handling**: Graceful error handling for malformed alerts and invalid data to maintain pipeline integrity.
 
 ---
 
@@ -164,12 +167,20 @@ ThreatEye/
 | Source IP Internal | Binary | Hardcoded validation |
 | Destination IP Internal | Binary | Hardcoded validation |
 
-### Deployment Ready
+### Defensive Error Handling
+- ✅ Never raises exceptions on bad alert data - returns safe defaults
+- ✅ Validates all fields with type checking and range normalization
+- ✅ Handles missing/null values gracefully without breaking ingestion pipeline
+- ✅ Logs warnings for suspicious data while continuing processing
+- ✅ Batch processing with per-alert error isolation
+
+### Production Ready
 - ✅ Model trained on production CIC-IDS2017 dataset
 - ✅ Binary classification: Benign (0) vs. Attack (1)
 - ✅ Sub-100ms prediction latency per alert
 - ✅ Integrated with [ThreatAnalyzer](Backend/ml_features/threat_analyzer.py)
 - ✅ Features work across different Snort rulesets (no retraining needed)
+- ✅ Defensive feature extraction prevents pipeline failures on malformed data
 
 ### Usage
 ```python
@@ -193,10 +204,42 @@ prediction = analyzer.analyze_alert(alert)
 
 ---
 
+## � Database & Log Management
+
+### Resumable Log Ingestion
+- **LogIngestionState Model**: Tracks per-file ingestion progress (offset, inode, timestamp)
+- **Offset Persistence**: Automatically resumes from last known byte position on restart
+- **File Rotation Detection**: Inode tracking detects rotated log files to prevent duplicates
+- **Atomic Updates**: Processed alerts and state changes committed together for consistency
+
+### Path Management
+- **Relative Path Conversion**: Log file paths converted from absolute to relative for portability across machines
+- **Date-Based Organization**: Logs stored in `real_logs/<year>/<month>/<day>/` hierarchy for efficient retrieval
+- **Automatic Discovery**: Poll command recursively discovers new log files in directory tree
+
+---
+
+## 💾 Database & Log Management
+
+### Resumable Log Ingestion
+- **LogIngestionState Model**: Tracks per-file ingestion progress (offset, inode, timestamp)
+- **Offset Persistence**: Automatically resumes from last known byte position on restart
+- **File Rotation Detection**: Inode tracking detects rotated log files to prevent duplicates
+- **Atomic Updates**: Processed alerts and state changes committed together for consistency
+
+### Path Management
+- **Relative Path Conversion**: Log file paths converted from absolute to relative for portability across machines
+- **Date-Based Organization**: Logs stored in `real_logs/<year>/<month>/<day>/` hierarchy for efficient retrieval
+- **Automatic Discovery**: Poll command recursively discovers new log files in directory tree
+
+---
+
 ## 🔒 Security & Optimization
 - **Automatic Login**: Users are instantly logged in and redirected to the dashboard after successful email verification.
 - **Organization Safety**: Max user limits are enforced at the model level based on the subscription tier (Basic: 5, Professional: 20).
-- **Live Ingestion Safety**: Log readers track file offsets and deduplicate events before insert.
+- **Live Ingestion Safety**: Log readers track file offsets and deduplicate events before insert with LogIngestionState.
 - **ML Security**: Trained models use joblib format (safer than pickle) with no external dependencies beyond scikit-learn.
+- **Data Validation**: All incoming alerts validated and sanitized before ML processing and database storage.
+- **Multi-Tenant Isolation**: Organization data completely isolated at model level with no cross-tenant data leakage.
 
 ---

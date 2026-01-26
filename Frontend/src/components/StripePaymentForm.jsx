@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { useStripe, useElements, CardNumberElement, CardExpiryElement, CardCvcElement } from '@stripe/react-stripe-js';
 
+/**
+ * StripePaymentForm component - Credit card payment form
+ * Takes card details and confirms payment with Stripe
+ * Used for subscription plan purchases
+ */
 const StripePaymentForm = ({ clientSecret, onPaymentSuccess, planName, amount }) => {
     const stripe = useStripe();
     const elements = useElements();

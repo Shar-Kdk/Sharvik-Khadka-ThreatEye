@@ -8,21 +8,26 @@ import SubscriptionDetails from '../pages/dashboard/SubscriptionDetails';
 import SubscriptionHistory from '../pages/dashboard/SubscriptionHistory';
 import LiveTraffic from '../pages/dashboard/LiveTraffic';
 
+/**
+ * Dashboard component - Main application layout after login
+ * Checks subscription status, shows different views for Platform Owner vs Org Admin
+ * Routes to different dashboard pages: Overview, Live Traffic, Subscription Management
+ */
 function Dashboard({ user, token, onLogout }) {
+  // Track subscription status and loading state
   const [subscription, setSubscription] = useState(null);
   const [loading, setLoading] = useState(true);
+  // Profile dropdown menu visibility
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const profileMenuRef = useRef(null);
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const location = useLocation();
 
-  // Detect if user is the Platform Owner using the user object role
+  // Check if user is a Platform Owner (system admin) vs Organization Admin
   const isPlatformOwner = user?.role === 'platform_owner';
 
-  /**
-   * Get page title based on current route
-   */
   const getPageTitle = () => {
+    // Map routes to page titles
     const pathToTitle = {
       '/dashboard': isPlatformOwner ? 'Platform Overview' : 'General Overview',
       '/dashboard/organizations': 'Organizations',
@@ -34,10 +39,8 @@ function Dashboard({ user, token, onLogout }) {
     return pathToTitle[location.pathname] || 'Overview';
   };
 
-  /**
-   * Get user display name from first/last name or email
-   */
   const getUserDisplayName = () => {
+    // Get user's full name or fallback to email username
     if (user?.first_name && user?.last_name) {
       return `${user.first_name} ${user.last_name}`;
     }
@@ -48,6 +51,7 @@ function Dashboard({ user, token, onLogout }) {
   };
 
   useEffect(() => {
+    // Fetch user's subscription status from backend
     const checkSubscription = async () => {
       try {
         if (!token) return;
@@ -78,6 +82,7 @@ function Dashboard({ user, token, onLogout }) {
 
   // Close profile menu when clicking outside
   useEffect(() => {
+    // Close profile menu when clicking outside of it
     const handleClickOutside = (event) => {
       if (profileMenuRef.current && !profileMenuRef.current.contains(event.target)) {
         setShowProfileMenu(false);

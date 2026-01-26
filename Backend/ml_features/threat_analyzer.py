@@ -1,14 +1,5 @@
 """
-ThreatEye ML Integration - Use Trained Random Forest Model with Snort Alerts
-US015 Implementation - Feature extraction + ML prediction
-
-This module integrates the trained Random Forest model (simplified with 12 features)
-with ThreatEye's Snort alert ingestion pipeline.
-
-Updated: Uses SimplifiedFeatureExtractor (12 features) instead of 55 CIC-IDS17 features
-- 12x faster training (~5 minutes vs 2 hours)
-- Better feature alignment with Snort alert data
-- Simpler, more maintainable pipeline
+ThreatEye ML Integration - use trained Random Forest model with Snort alerts
 """
 
 import numpy as np
@@ -20,23 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ThreatAnalyzer:
-    """
-    End-to-end threat analysis using trained Random Forest model.
-    
-    Pipeline:
-    1. Extract 12 simplified features from Snort alert
-    2. Load trained Random Forest model  
-    3. Make binary prediction: Benign (0) vs Attack (1)
-    4. Return threat classification with confidence score
-    
-    Features:
-    - dest_port, src_port (normalized)
-    - protocol (TCP/UDP/ICMP encoded)
-    - threat_level (safe/medium/high encoded)
-    - sid (normalized)
-    - TCP flags (FIN, RST, PSH, ACK, URG)
-    - IP location (src/dest internal or external)
-    """
+    """End-to-end threat analysis using Random Forest model with 12 simplified features."""
     
     def __init__(self, model_name='random_forest_simplified', models_dir='trained_models'):
         """
@@ -51,45 +26,23 @@ class ThreatAnalyzer:
         self.model = None
         self.model_loaded = False
         
-        # Try to load the model
+        # Load the model during initialization
         self._load_model(model_name)
     
     def _load_model(self, model_name):
-        """Load the trained Random Forest model."""
+        """Load the Random Forest model."""
         try:
             self.model = self.model_loader.load_model(model_name)
             if self.model:
                 self.model_loaded = True
-                logger.info(f"✅ Loaded Random Forest model: {model_name}")
+                logger.info(f"Loaded model: {model_name}")
             else:
-                logger.warning(f"⚠️  Could not load model: {model_name}")
+                logger.warning(f"Could not load model: {model_name}")
         except Exception as e:
-            logger.error(f"❌ Error loading model: {str(e)}")
+            logger.error(f"Error loading model: {str(e)}")
     
     def analyze_alert(self, alert):
-        """
-        Analyze a single Snort alert using Random Forest model.
-        
-        Args:
-            alert: Alert object from database OR dict with alert data
-                   Expected fields: dest_port, src_port, protocol, threat_level,
-                                   sid, message, src_ip, dest_ip
-        
-        Returns:
-            dict with keys:
-                - alert_id: Alert ID (if available)
-                - threat_class: 0 (Benign) or 1 (Attack)
-                - confidence: Prediction confidence (0-1)
-                - features_extracted: Number of features extracted (always 12)
-                - error: Error message if any
-        
-        Example:
-            >>> alert = Alert.objects.first()
-            >>> analyzer = ThreatAnalyzer()
-            >>> result = analyzer.analyze_alert(alert)
-            >>> if result['threat_class'] == 1:
-            ...     print(f"🚨 Attack detected! Confidence: {result['confidence']:.2%}")
-        """
+        """Analyze a single alert using Random Forest model."""
         try:
             if not self.model_loaded:
                 alert_id = getattr(alert, 'id', None) or alert.get('id') if isinstance(alert, dict) else None
@@ -145,70 +98,117 @@ class ThreatAnalyzer:
         if isinstance(alert, dict):
             return alert
         
-        return {
-            'dest_port': alert.dest_port,
-            'src_port': alert.src_port,
-            'protocol': alert.protocol,
-            'threat_level': alert.threat_level,
-            'sid': alert.sid,
-            'message': alert.message,
-            'src_ip': str(alert.src_ip),
-            'dest_ip': str(alert.dest_ip),
-        }
+        try:
+            return {
+                'dest_port': getattr(alert, 'dest_port', None),
+                'src_port': getattr(alert, 'src_port', None),
+                'protocol': str(getattr(alert, 'protocol', 'TCP')).strip() or 'TCP',
+                'threat_level': str(getattr(alert, 'threat_level', 'safe')).strip().lower() or 'safe',
+                'sid': str(getattr(alert, 'sid', 'unknown')).strip() or 'unknown',
+                'message': str(getattr(alert, 'message', 'Unknown alert')).strip() or 'Unknown alert',
+                'src_ip': str(getattr(alert, 'src_ip', '0.0.0.0')),
+                'dest_ip': str(getattr(alert, 'dest_ip', '0.0.0.0')),
+            }
+        except Exception as e:
+            logger.error(f"Error converting alert to dict: {e}, returning safe defaults")
+            return {
+                'dest_port': None,
+                'src_port': None,
+                'protocol': 'TCP',
+                'threat_level': 'safe',
+                'sid': 'unknown',
+                'message': 'Unknown alert',
+                'src_ip': '0.0.0.0',
+                'dest_ip': '0.0.0.0',
+            }
     
     def analyze_batch(self, alerts, batch_size=1000):
-        """
-        Analyze multiple alerts efficiently.
-        
-        Args:
-            alerts: List or QuerySet of alerts to analyze
-            batch_size: Process in batches for memory efficiency
-        
-        Returns:
-            dict with summary statistics and per-alert results
-        """
-        if not self.model_loaded:
+        """Analyze multiple alerts efficiently and return summary statistics."""
+        try:
+            alerts_list = list(alerts) if alerts else []
+            total = len(alerts_list)
+            
+            if total == 0:
+                return {
+                    'total': 0,
+                    'analyzed': 0,
+                    'benign': 0,
+                    'attack': 0,
+                    'errors': 0,
+                    'error': None,
+                    'attack_percentage': 0,
+                    'results': [],
+                }
+            
+            if not self.model_loaded:
+                return {
+                    'total': total,
+                    'analyzed': 0,
+                    'benign': 0,
+                    'attack': 0,
+                    'errors': total,
+                    'error': 'Model not loaded',
+                    'attack_percentage': 0,
+                    'results': [],
+                }
+            
+            results = []
+            attack_count = 0
+            benign_count = 0
+            error_count = 0
+            
+            for i in range(0, total, batch_size):
+                batch = alerts_list[i:i+batch_size]
+                
+                for alert in batch:
+                    try:
+                        result = self.analyze_alert(alert)
+                        results.append(result)
+                        
+                        if result['error'] is None:
+                            if result['threat_class'] == 1:
+                                attack_count += 1
+                            else:
+                                benign_count += 1
+                        else:
+                            error_count += 1
+                    except Exception as e:
+                        logger.warning(f"Error analyzing alert in batch: {e}")
+                        error_count += 1
+                        results.append({
+                            'alert_id': None,
+                            'threat_class': None,
+                            'confidence': None,
+                            'features_extracted': 0,
+                            'error': f'Batch analysis error: {str(e)}',
+                        })
+            
+            analyzed = total - error_count
+            attack_percentage = (attack_count / analyzed * 100) if analyzed > 0 else 0
+            
             return {
-                'total': len(alerts),
+                'total': total,
+                'analyzed': analyzed,
+                'benign': benign_count,
+                'attack': attack_count,
+                'errors': error_count,
+                'error': None,
+                'attack_percentage': attack_percentage,
+                'results': results,
+            }
+        
+        except Exception as e:
+            logger.error(f"Unexpected error in analyze_batch: {e}")
+            return {
+                'total': 0,
                 'analyzed': 0,
                 'benign': 0,
                 'attack': 0,
-                'error': 'Model not loaded',
+                'errors': 1,
+                'error': f'Unexpected error: {str(e)}',
+                'attack_percentage': 0,
+                'results': [],
             }
-        
-        results = []
-        attack_count = 0
-        benign_count = 0
-        error_count = 0
-        
-        # Convert to list if QuerySet
-        alerts_list = list(alerts)
-        total = len(alerts_list)
-        
-        for i in range(0, total, batch_size):
-            batch = alerts_list[i:i+batch_size]
-            
-            for alert in batch:
-                result = self.analyze_alert(alert)
-                results.append(result)
-                
-                if result['error'] is None:
-                    if result['threat_class'] == 1:
-                        attack_count += 1
-                    else:
-                        benign_count += 1
-                else:
-                    error_count += 1
-        
-        return {
-            'total': total,
-            'analyzed': total - error_count,
-            'benign': benign_count,
-            'attack': attack_count,
-            'errors': error_count,
-            'attack_percentage': (attack_count / (total - error_count) * 100) if total > error_count else 0,
-            'results': results,
-        }
     
     def get_threat_label(self, threat_class):
         """Get human-readable threat label."""

@@ -7,7 +7,7 @@ from django.db.models.functions import TruncMinute
 from .models import Alert
 from .services import map_priority_to_threat_level
 
-
+# Map Snort Signature IDs to human-readable attack names
 SID_ATTACK_MAP = {
     '1000015': 'Possible Malware C2 Communication',
     '1000014': 'Possible MITM Activity Detected',
@@ -18,9 +18,13 @@ SID_ATTACK_MAP = {
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def live_alerts(request):
+    """
+    Get latest security alerts (limit: 1-10000, default 100)
+    Used for live alert feed in dashboard
+    """
     limit = request.query_params.get('limit', '100')
     try:
-        limit = max(1, min(500, int(limit)))
+        limit = max(1, min(10000, int(limit)))
     except ValueError:
         limit = 100
 
@@ -41,7 +45,7 @@ def live_alerts(request):
                 'message': alert.message,
                 'classification': alert.classification,
                 'priority': alert.priority,
-                'threat_level': map_priority_to_threat_level(alert.priority),
+                'threat_level': alert.threat_level,
             }
             for alert in alerts
         ],
@@ -51,6 +55,12 @@ def live_alerts(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def threat_level_distribution(request):
+    """
+    Get count of alerts grouped by threat level (safe, medium, high)
+    Returns: {'safe': 100, 'medium': 50, 'high': 10}
+    Used for pie/donut chart on dashboard
+    """
+    # Count alerts by threat level
     aggregated = (
         Alert.objects.values('threat_level')
         .annotate(count=Count('id'))
@@ -75,6 +85,12 @@ def threat_level_distribution(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def top_attacks(request):
+    """
+    Get top 5 most common attack types
+    Shows which attacks are happening most frequently
+    Used for Top Attacks bar chart on dashboard
+    """
+    # Find top 5 attacks by occurrence count
     top_sids = list(
         Alert.objects.values('sid')
         .annotate(count=Count('id'))
@@ -111,6 +127,12 @@ def top_attacks(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def alerts_timeline(request):
+    """
+    Get alerts grouped by time (1-minute buckets)
+    Shows alert frequency over time in a line chart
+    Used for alerts timeline/activity chart on dashboard
+    """
+    # Group alerts by 1-minute time buckets and count
     timeline = (
         Alert.objects.annotate(bucket=TruncMinute('timestamp'))
         .values('bucket')
@@ -132,6 +154,12 @@ def alerts_timeline(request):
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def protocol_statistics(request):
+    """
+    Get breakdown of network protocols in alerts (TCP, UDP, ICMP, etc.)
+    Shows which protocols are being attacked most
+    Used for protocol distribution chart on dashboard
+    """
+    # Count alerts by protocol type
     protocol_stats = (
         Alert.objects.values('protocol')
         .annotate(count=Count('id'))

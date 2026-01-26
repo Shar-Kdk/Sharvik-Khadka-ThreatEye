@@ -16,24 +16,24 @@ from pathlib import Path
 from dotenv import load_dotenv
 load_dotenv()
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
+# ===== PROJECT PATHS =====
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
-
+# ===== CORE DJANGO SETTINGS =====
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-lqgk5gj7f)o&pz_98dg@e!0r#=zhi=2i2h9rut$6r49cvr^4=p'
 
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
+# List of hosts allowed to serve this Django site (empty = localhost only during development)
 ALLOWED_HOSTS = []
 
 
-# Application definition
-
+# ===== INSTALLED APPLICATIONS =====
+# Core Django: admin, auth, sessions, static files
+# Third-party: REST, CORS
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -49,6 +49,8 @@ INSTALLED_APPS = [
     'alerts',
 ]
 
+# ===== MIDDLEWARE STACK =====
+# Security, sessions, CORS, auth, messages, clickjacking protection
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -60,8 +62,11 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Main URL configuration - maps URLs to views
 ROOT_URLCONF = 'ThreatEye.urls'
 
+# ===== TEMPLATE ENGINE =====
+# Django template rendering configuration
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
@@ -77,11 +82,12 @@ TEMPLATES = [
     },
 ]
 
+# WSGI application for production deployment
 WSGI_APPLICATION = 'ThreatEye.wsgi.application'
 
 
-# Database
-# https://docs.djangoproject.com/en/5.2/ref/settings/#databases
+# ===== DATABASE CONFIGURATION =====
+# MySQL connection for alerts, users, subscriptions
 
 import pymysql
 pymysql.version_info = (2, 2, 8, "final", 0)
@@ -108,9 +114,8 @@ DATABASES = {
 }
 
 
-# Password validation
-# https://docs.djangoproject.com/en/5.2/ref/settings/#auth-password-validators
-
+# ===== PASSWORD VALIDATION =====
+# Strong passwords: not similar to user data, min length, not common, not all numeric
 AUTH_PASSWORD_VALIDATORS = [
     {
         'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
@@ -127,9 +132,8 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 
-# Internationalization
-# https://docs.djangoproject.com/en/5.2/topics/i18n/
-
+# ===== INTERNATIONALIZATION & LOCALIZATION =====
+# Set default language and timezone
 LANGUAGE_CODE = 'en-us'
 
 TIME_ZONE = 'UTC'
@@ -139,19 +143,19 @@ USE_I18N = True
 USE_TZ = True
 
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.2/howto/static-files/
-
+# ===== STATIC FILES (CSS, JAVASCRIPT, IMAGES) =====
+# Static file serving URL
 STATIC_URL = 'static/'
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
-
+# Default primary key field type - use 64-bit integers for large datasets
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+# ===== CUSTOM AUTHENTICATION =====
+# Custom User model with email-based auth (not username)
 AUTH_USER_MODEL = 'authentication.User'
 
-# REST Framework Configuration
+# ===== REST FRAMEWORK API CONFIGURATION =====
+# JWT authentication for all API endpoints, default to allowing all access (permission checked per-view)
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
@@ -161,7 +165,8 @@ REST_FRAMEWORK = {
     ],
 }
 
-# JWT Configuration
+# ===== JWT TOKEN CONFIGURATION =====
+# 1-hour token lifetime with Bearer auth header
 from datetime import timedelta
 
 SIMPLE_JWT = {
@@ -169,7 +174,8 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# CORS Configuration
+# ===== CORS (CROSS-ORIGIN RESOURCE SHARING) =====
+# Allow frontend (Next.js, Vite) to call backend from localhost:3000 and :5173
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
@@ -178,7 +184,9 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 CORS_ALLOW_CREDENTIALS = True
-# Email Configuration (Gmail)
+
+# ===== EMAIL CONFIGURATION (GMAIL SMTP) =====
+# For verification codes and alert notifications
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
 EMAIL_PORT = 587
@@ -188,12 +196,15 @@ EMAIL_HOST_PASSWORD = os.environ.get('EMAIL_HOST_PASSWORD')
 DEFAULT_FROM_EMAIL = os.environ.get('DEFAULT_FROM_EMAIL', 'sharvikhadka@gmail.com')
 
 
-# Stripe Payment Gateway
+# ===== STRIPE PAYMENT GATEWAY CONFIGURATION =====
+# Subscription payments and billing
 STRIPE_PUBLISHABLE_KEY = os.environ.get('STRIPE_PUBLISHABLE_KEY')
 STRIPE_SECRET_KEY = os.environ.get('STRIPE_SECRET_KEY')
 
+# Frontend URL for success/failure redirects
 FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 
-# Snort ingestion configuration
+# ===== SNORT IDS LOG INGESTION CONFIGURATION =====
+# Directory for Snort logs, polling interval
 SNORT_LOG_DIR = os.environ.get('SNORT_LOG_DIR', str(BASE_DIR.parent / 'real_logs'))
 SNORT_POLL_INTERVAL_SECONDS = int(os.environ.get('SNORT_POLL_INTERVAL_SECONDS', '3'))

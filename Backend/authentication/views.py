@@ -1,8 +1,4 @@
-"""Authentication API Views
-
-This module contains all API endpoints for user authentication and verification.
-Provides REST endpoints for login, email verification, and user profile management.
-"""
+"""Authentication API endpoints for login, email verification, and user profiles."""
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -15,9 +11,8 @@ from .models import User, Organization
 
 
 class LoginView(APIView):
-    
     def post(self, request):
-        """Authenticate user and return JWT token"""
+        """Authenticate user and return JWT token."""
         serializer = LoginSerializer(data=request.data)
         
         if serializer.is_valid():
@@ -29,16 +24,15 @@ class LoginView(APIView):
             return Response({
                 'message': 'Login successful',
                 'user': UserSerializer(user).data,
-                'token': str(refresh.access_token),  # 1-hour validity
+                'token': str(refresh.access_token),
             }, status=status.HTTP_200_OK)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class VerifyEmailView(APIView):
-    
     def post(self, request):
-        """Verify email with provided code"""
+        """Verify email with verification code."""
         serializer = EmailVerificationSerializer(data=request.data)
         
         if serializer.is_valid():
@@ -63,15 +57,12 @@ class VerifyEmailView(APIView):
 
 
 class ResendVerificationCodeView(APIView):
-    
     def post(self, request):
-        """Generate new code and send verification email"""
+        """Generate new verification code and send email."""
         serializer = ResendVerificationSerializer(data=request.data)
         
         if serializer.is_valid():
             user = serializer.validated_data['user']
-            
-            # Send new verification email (generates new code automatically)
             if send_verification_email(user):
                 return Response({
                     'message': 'Verification code sent to email',
