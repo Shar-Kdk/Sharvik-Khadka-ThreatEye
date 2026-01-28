@@ -3,7 +3,16 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../components/StripePaymentForm';
 import { useNavigate } from 'react-router-dom';
+import { getSubscriptionPlans, createPaymentIntent, verifyPayment, getSubscriptionStatus } from '../services/api';
 
+/**
+ * SubscriptionPlans page
+ * Following React-Django-Stripe-Backend pattern:
+ * 1. Fetch plans from backend
+ * 2. User selects a plan → calls createPaymentIntent → gets clientSecret
+ * 3. Stripe.js confirms payment on frontend using clientSecret
+ * 4. On success → calls verifyPayment → backend activates org subscription
+ */
 const SubscriptionPlans = ({ token }) => {
     const [plans, setPlans] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -12,44 +21,37 @@ const SubscriptionPlans = ({ token }) => {
     const [selectedPlan, setSelectedPlan] = useState(null);
     const [clientSecret, setClientSecret] = useState('');
     const [stripePromise, setStripePromise] = useState(null);
-    const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+    const [currentPlanId, setCurrentPlanId] = useState(null);
     const navigate = useNavigate();
 
     useEffect(() => {
         fetchPlans();
+        fetchCurrentPlan();
     }, []);
 
     const fetchPlans = async () => {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 8000);
-
         try {
             setError('');
-            const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-            const response = await fetch(`${API_BASE_URL}/subscriptions/plans/`, {
-                headers,
-                signal: controller.signal,
-            });
-
-            if (!response.ok) {
-                const text = await response.text();
-                throw new Error(text || `Failed to fetch plans (${response.status})`);
-            }
-
-            if (response.ok) {
-                const data = await response.json();
-                setPlans(data);
-            }
+            setLoading(true);
+            const data = await getSubscriptionPlans(token);
+            setPlans(data);
         } catch (error) {
             console.error('Error fetching plans:', error);
-            if (error.name === 'AbortError') {
-                setError('Request timed out while loading plans. Please retry.');
-            } else {
-                setError('Unable to load plans right now. Please retry.');
-            }
+            setError('Unable to load plans right now. Please retry.');
         } finally {
-            clearTimeout(timeoutId);
             setLoading(false);
+        }
+    };
+
+    const fetchCurrentPlan = async () => {
+        try {
+            if (!token) return;
+            const data = await getSubscriptionStatus(token);
+            if (data.status === 'active' && data.plan_id) {
+                setCurrentPlanId(data.plan_id);
+            }
+        } catch (err) {
+            console.error('Error fetching current plan:', err);
         }
     };
 
@@ -61,38 +63,19 @@ const SubscriptionPlans = ({ token }) => {
                 return;
             }
 
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 20000);
             setLoading(true);
 
-            const response = await fetch(`${API_BASE_URL}/subscriptions/initiate/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ plan_id: plan.id }),
-                signal: controller.signal,
-            });
+            // Call backend to create Stripe PaymentIntent
+            const data = await createPaymentIntent(token, plan.id);
 
-            clearTimeout(timeoutId);
-            const data = await response.json();
+            // Load Stripe.js with the publishable key from backend
+            setStripePromise(loadStripe(data.publishableKey));
+            setClientSecret(data.clientSecret);
+            setSelectedPlan(plan);
 
-            if (response.ok) {
-                setStripePromise(loadStripe(data.publishableKey));
-                setClientSecret(data.clientSecret);
-                setSelectedPlan(plan);
-            } else {
-                const errorMessage = data.error || data.detail || 'Failed to initiate payment';
-                setSelectError(errorMessage);
-            }
         } catch (error) {
             console.error('Error initiating payment:', error);
-            if (error.name === 'AbortError') {
-                setSelectError('Payment initiation timed out. Please try again.');
-            } else {
-                setSelectError('Failed to contact payment server. Please check your connection and try again.');
-            }
+            setSelectError(error.message || 'Failed to initiate payment. Please try again.');
         } finally {
             setLoading(false);
         }
@@ -101,20 +84,11 @@ const SubscriptionPlans = ({ token }) => {
     const handlePaymentSuccess = async (paymentIntentId) => {
         try {
             setLoading(true);
-            const response = await fetch(`${API_BASE_URL}/subscriptions/verify/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${token}`
-                },
-                body: JSON.stringify({ payment_intent_id: paymentIntentId })
-            });
 
-            if (response.ok) {
-                navigate('/subscription/success');
-            } else {
-                navigate('/subscription/failed');
-            }
+            // Verify payment with backend → activates organization subscription
+            await verifyPayment(token, paymentIntentId);
+            navigate('/subscription/success');
+
         } catch (error) {
             console.error('Verification failed:', error);
             navigate('/subscription/failed');
@@ -184,28 +158,48 @@ const SubscriptionPlans = ({ token }) => {
                             </div>
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                                {plans.map((plan) => (
-                                    <div key={plan.id} className="bg-[#0d1117] border border-[#30363d] rounded-lg p-8 flex flex-col">
-                                        <h2 className="text-xl font-bold text-white mb-2">{plan.display_name}</h2>
-                                        <p className="text-3xl font-bold text-white mb-6">${plan.price}<span className="text-sm text-gray-500 font-normal"> / mo</span></p>
+                                {plans.map((plan) => {
+                                    const isCurrentPlan = currentPlanId === plan.id;
 
-                                        <ul className="space-y-4 mb-8 flex-grow">
-                                            <li className="flex items-center text-sm text-gray-300">
-                                                <span className="text-blue-500 mr-2">✓</span> {plan.max_users} Users
-                                            </li>
-                                            <li className="flex items-center text-sm text-gray-300">
-                                                <span className="text-blue-500 mr-2">✓</span> {plan.email_alerts_enabled ? "Email Alerts" : "Dashboard Only"}
-                                            </li>
-                                        </ul>
+                                    return (
+                                        <div key={plan.id} className={`bg-[#0d1117] border rounded-lg p-8 flex flex-col ${isCurrentPlan ? 'border-green-500/50' : 'border-[#30363d]'}`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <h2 className="text-xl font-bold text-white">{plan.display_name}</h2>
+                                                {isCurrentPlan && (
+                                                    <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-green-500/10 text-green-500 border border-green-500/20">
+                                                        Current Plan
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-3xl font-bold text-white mb-6">${plan.price}<span className="text-sm text-gray-500 font-normal"> / mo</span></p>
 
-                                        <button
-                                            onClick={() => handlePlanSelect(plan)}
-                                            className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-md transition-colors"
-                                        >
-                                            Select Plan
-                                        </button>
-                                    </div>
-                                ))}
+                                            <ul className="space-y-4 mb-8 flex-grow">
+                                                <li className="flex items-center text-sm text-gray-300">
+                                                    <span className="text-blue-500 mr-2">✓</span> {plan.max_users} Users
+                                                </li>
+                                                <li className="flex items-center text-sm text-gray-300">
+                                                    <span className="text-blue-500 mr-2">✓</span> {plan.email_alerts_enabled ? "Email Alerts" : "Dashboard Only"}
+                                                </li>
+                                            </ul>
+
+                                            {isCurrentPlan ? (
+                                                <button
+                                                    disabled
+                                                    className="w-full bg-gray-800 text-gray-500 font-bold py-3 rounded-md cursor-not-allowed"
+                                                >
+                                                    Already Subscribed
+                                                </button>
+                                            ) : (
+                                                <button
+                                                    onClick={() => handlePlanSelect(plan)}
+                                                    className="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-3 rounded-md transition-colors"
+                                                >
+                                                    Select Plan
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
                     </>

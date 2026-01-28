@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getSubscriptionHistory } from '../../services/api';
+import { getPaymentHistory } from '../../services/api';
 import Pagination from '../../components/common/Pagination';
 
 const SubscriptionHistory = ({ token }) => {
@@ -13,7 +13,7 @@ const SubscriptionHistory = ({ token }) => {
     useEffect(() => {
         const fetchHistory = async () => {
             try {
-                const data = await getSubscriptionHistory(token);
+                const data = await getPaymentHistory(token);
                 setHistory(data);
             } catch (error) {
                 console.error("Error fetching history:", error);

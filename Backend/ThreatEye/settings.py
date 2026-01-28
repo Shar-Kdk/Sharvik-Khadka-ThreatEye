@@ -208,3 +208,39 @@ FRONTEND_URL = os.environ.get('FRONTEND_URL', 'http://localhost:5173')
 # Directory for Snort logs, polling interval
 SNORT_LOG_DIR = os.environ.get('SNORT_LOG_DIR', str(BASE_DIR.parent / 'real_logs'))
 SNORT_POLL_INTERVAL_SECONDS = int(os.environ.get('SNORT_POLL_INTERVAL_SECONDS', '3'))
+
+# ===== LOGGING CONFIGURATION =====
+# Log all debug and error messages to console and file
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'subscription': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'alerts': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+        'authentication': {
+            'handlers': ['console'],
+            'level': 'DEBUG',
+            'propagate': True,
+        },
+    },
+}

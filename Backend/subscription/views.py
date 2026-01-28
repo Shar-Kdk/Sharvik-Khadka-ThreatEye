@@ -1,270 +1,346 @@
+"""
+Subscription Views - Reworked following React-Django-Stripe-Backend pattern.
+
+Flow:
+1. GET  /subscriptions/plans/                → List available plans
+2. POST /subscriptions/create-payment-intent/ → Create Stripe PaymentIntent (saves Payment as pending)
+3. POST /subscriptions/verify-payment/        → Verify intent succeeded, activate org subscription
+4. GET  /subscriptions/status/                → Check current subscription status
+5. GET  /subscriptions/payment-history/       → List user's payment history
+"""
+
 import stripe
+import logging
+from datetime import timedelta
 from django.conf import settings
 from django.utils import timezone
+from rest_framework.views import APIView
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
+from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework import status
-from .models import Subscription, SubscriptionPlan
-from authentication.models import Organization, User
+from .models import Payment, SubscriptionPlan
+from .serializers import PaymentSerializer, SubscriptionPlanSerializer
 
+logger = logging.getLogger(__name__)
+
+# Initialize Stripe
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
-def _downgrade_organization_if_unsubscribed(org):
-    """Keep organization fields consistent when no active subscription exists."""
-    if not org:
-        return
-
-    if (
-        org.subscription_tier != Organization.TIER_NOT_SUBSCRIBED
-        or org.is_active
-        or org.max_users != 1
-    ):
-        org.subscription_tier = Organization.TIER_NOT_SUBSCRIBED
-        org.is_active = False
-        org.max_users = 1
-        org.save(update_fields=['subscription_tier', 'is_active', 'max_users'])
-
-
-def _sync_expired_subscriptions(org=None):
-    """Expire overdue subscriptions and reflect the result on organization state."""
-    now = timezone.now()
-    active_subs = Subscription.objects.filter(status='active', end_date__isnull=False, end_date__lte=now)
-    if org:
-        active_subs = active_subs.filter(organization=org)
-
-    for sub in active_subs.select_related('organization'):
-        sub.status = 'expired'
-        sub.save(update_fields=['status', 'updated_at'])
-        _downgrade_organization_if_unsubscribed(sub.organization)
-
-    if org and not Subscription.objects.filter(organization=org, status='active').exists():
-        _downgrade_organization_if_unsubscribed(org)
+# ===== 1. LIST PLANS =====
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def get_plans(request):
-    plans = SubscriptionPlan.objects.all().values('id', 'display_name', 'max_users', 'email_alerts_enabled', 'price')
-    return Response(list(plans))
-
-@api_view(['POST'])
-@permission_classes([IsAuthenticated])
-def initiate_payment(request):
-    """Create Stripe PaymentIntent and pending subscription."""
+    """
+    GET /subscriptions/plans/
+    Returns all available subscription plans.
+    """
     try:
-        plan_id = request.data.get('plan_id')
-        user = request.user
-        org = user.organization
-        if not org:
-            return Response({'error': 'User does not belong to any organization.'}, status=status.HTTP_403_FORBIDDEN)
+        plans = SubscriptionPlan.objects.all()
+        serializer = SubscriptionPlanSerializer(plans, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    except Exception as e:
+        logger.error(f"Error fetching plans: {str(e)}")
+        return Response(
+            {'error': 'Failed to fetch plans'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
-        try:
-            plan = SubscriptionPlan.objects.get(id=plan_id)
-        except SubscriptionPlan.DoesNotExist:
-            return Response({'error': 'Plan not found'}, status=status.HTTP_404_NOT_FOUND)
 
-        amount = int(plan.price * 100)
-        
-        # Create the PaymentIntent
+# ===== 2. CREATE PAYMENT INTENT (Following reference pattern) =====
+
+class CreatePaymentIntentView(APIView):
+    """
+    POST /subscriptions/create-payment-intent/
+    Request body: { plan_id }
+
+    Following React-Django-Stripe-Backend pattern:
+    1. Validate inputs
+    2. Create Stripe PaymentIntent
+    3. Save Payment record (pending)
+    4. Return clientSecret + publishableKey to frontend
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
         try:
+            plan_id = request.data.get('plan_id')
+            user_email = request.user.email
+
+            # --- Validate plan_id ---
+            if not plan_id:
+                return Response(
+                    {'error': 'plan_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            try:
+                plan_id = int(plan_id)
+            except (ValueError, TypeError):
+                return Response(
+                    {'error': 'Invalid plan_id format'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # --- Fetch plan ---
+            try:
+                plan = SubscriptionPlan.objects.get(id=plan_id)
+            except SubscriptionPlan.DoesNotExist:
+                available = list(SubscriptionPlan.objects.values_list('id', 'display_name'))
+                return Response(
+                    {'error': f'Plan not found. Available plans: {available}'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            # --- Check if org already has this plan ---
+            org = getattr(request.user, 'organization', None)
+            if org and org.is_active:
+                plan_name_lower = plan.display_name.lower()
+                current_tier = org.subscription_tier
+                if (
+                    ('basic' in plan_name_lower and current_tier == 'basic') or
+                    ('professional' in plan_name_lower and current_tier == 'professional')
+                ):
+                    return Response(
+                        {'error': f'Your organization is already on the {plan.display_name} plan.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+
+            # --- Prepare amount (convert dollars to cents) ---
+            amount = int(plan.price * 100)
+            currency = 'usd'
+
+            if amount <= 0:
+                return Response(
+                    {'error': 'Invalid plan price'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # --- Create Stripe PaymentIntent ---
+            stripe.api_key = settings.STRIPE_SECRET_KEY
             intent = stripe.PaymentIntent.create(
                 amount=amount,
-                currency='usd',
+                currency=currency,
                 metadata={
-                    'org_id': org.id,
                     'plan_id': plan.id,
-                    'user_email': user.email
+                    'plan_name': plan.display_name,
+                    'user_email': user_email,
                 }
             )
-        except stripe.error.StripeError as e:
-            return Response({'error': f"Stripe Error: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        # Create/Update pending subscription
-        sub, created = Subscription.objects.get_or_create(
-            organization=org,
-            defaults={
-                'plan': plan,
+
+            # --- Save Payment record to DB (following reference pattern) ---
+            payment_data = {
+                'amount': plan.price,
+                'currency': currency,
+                'stripe_payment_id': intent['id'],
+                'user_email': user_email,
+                'plan': plan.id,
+                'organization': (
+                    request.user.organization.id
+                    if hasattr(request.user, 'organization') and request.user.organization
+                    else None
+                ),
                 'status': 'pending',
-                'stripe_payment_intent_id': intent.id
             }
-        )
-        
-        # If subscription exists, update plan and payment intent
-        if not created:
-            sub.plan = plan
-            sub.status = 'pending'
-            sub.stripe_payment_intent_id = intent.id
-            sub.save()
 
-        return Response({
-            'clientSecret': intent.client_secret,
-            'publishableKey': settings.STRIPE_PUBLISHABLE_KEY,
-            'subscriptionId': sub.id
-        })
+            serializer = PaymentSerializer(data=payment_data)
+            if serializer.is_valid():
+                serializer.save()
 
-    except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                # Return clientSecret for Stripe.js to confirm payment on frontend
+                return Response({
+                    'clientSecret': intent['client_secret'],
+                    'publishableKey': settings.STRIPE_PUBLISHABLE_KEY,
+                    'payment': serializer.data,
+                    'planName': plan.display_name,
+                    'planId': plan.id,
+                }, status=status.HTTP_201_CREATED)
 
-@api_view(['POST'])
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe error: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error creating PaymentIntent: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Failed to create payment intent'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ===== 3. VERIFY PAYMENT & ACTIVATE SUBSCRIPTION =====
+
+class VerifyPaymentView(APIView):
+    """
+    POST /subscriptions/verify-payment/
+    Request body: { payment_intent_id }
+
+    Verifies that Stripe payment succeeded.
+    On success: marks Payment as completed AND activates the organization subscription.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        try:
+            payment_intent_id = request.data.get('payment_intent_id')
+
+            if not payment_intent_id:
+                return Response(
+                    {'error': 'payment_intent_id is required'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # --- Retrieve PaymentIntent from Stripe ---
+            stripe.api_key = settings.STRIPE_SECRET_KEY
+            intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+
+            if intent.status == 'succeeded':
+                # --- Update Payment record ---
+                try:
+                    payment = Payment.objects.get(stripe_payment_id=payment_intent_id)
+                    payment.status = 'completed'
+                    payment.save()
+                    logger.info(f"Payment {payment.id} completed for {payment.user_email}")
+
+                    # --- ACTIVATE ORGANIZATION SUBSCRIPTION ---
+                    if payment.plan and payment.organization:
+                        org = payment.organization
+                        plan = payment.plan
+
+                        # Map plan display_name to subscription tier
+                        plan_name_lower = plan.display_name.lower()
+                        if 'basic' in plan_name_lower:
+                            org.subscription_tier = 'basic'
+                        elif 'professional' in plan_name_lower or 'pro' in plan_name_lower:
+                            org.subscription_tier = 'professional'
+                        else:
+                            org.subscription_tier = 'basic'
+
+                        # Organization.save() auto-sets is_active=True and max_users
+                        org.save()
+                        logger.info(
+                            f"Organization '{org.name}' activated: "
+                            f"tier={org.subscription_tier}, max_users={org.max_users}"
+                        )
+
+                except Payment.DoesNotExist:
+                    logger.warning(f"Payment record not found for intent: {payment_intent_id}")
+
+                return Response({
+                    'status': 'success',
+                    'paymentStatus': intent.status,
+                    'paymentId': payment.id if 'payment' in dir() else None,
+                }, status=status.HTTP_200_OK)
+
+            else:
+                return Response({
+                    'status': 'pending',
+                    'paymentStatus': intent.status,
+                    'message': 'Payment has not succeeded yet',
+                }, status=status.HTTP_400_BAD_REQUEST)
+
+        except stripe.error.StripeError as e:
+            logger.error(f"Stripe error verifying payment: {str(e)}")
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as e:
+            logger.error(f"Error verifying payment: {str(e)}", exc_info=True)
+            return Response(
+                {'error': 'Payment verification failed'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+# ===== 4. PAYMENT LIST (admin) =====
+
+class PaymentListView(ListAPIView):
+    """
+    GET /subscriptions/payments/
+    Admin: all payments. Regular user: own payments only.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = PaymentSerializer
+
+    def get_queryset(self):
+        if self.request.user.is_staff:
+            return Payment.objects.all().order_by('-created_at')
+        return Payment.objects.filter(
+            user_email=self.request.user.email
+        ).order_by('-created_at')
+
+
+# ===== 5. PAYMENT HISTORY =====
+
+@api_view(['GET'])
 @permission_classes([IsAuthenticated])
-def verify_payment(request):
+def get_payment_history(request):
     """
-    Final check after frontend confirms payment.
+    GET /subscriptions/payment-history/
+    Returns the last 20 payments for the authenticated user.
     """
-    payment_intent_id = request.data.get('payment_intent_id')
     try:
-        intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        if intent.status == 'succeeded':
-            sub = Subscription.objects.get(stripe_payment_intent_id=payment_intent_id)
-            sub.status = 'active'
-            sub.start_date = timezone.now()
-            # Set end date to 1 month from now for demo
-            sub.end_date = timezone.now() + timezone.timedelta(days=30)
-            sub.save()
-
-            # Sync Organization tier and capacity
-            org = sub.organization
-            if org:
-                # Map plan display name to organization tier constants
-                plan_name_lower = sub.plan.display_name.lower()
-                if 'basic' in plan_name_lower:
-                    org.subscription_tier = 'basic'
-                elif 'professional' in plan_name_lower:
-                    org.subscription_tier = 'professional'
-                elif 'enterprise' in plan_name_lower:
-                    org.subscription_tier = 'professional' # Map enterprise to professional for now or add to choices
-                
-                org.is_active = True
-                org.save() # This also updates max_users via Organization.save()
-
-            return Response({'status': 'success', 'plan': sub.plan.display_name})
-        else:
-            return Response({'status': 'failed', 'stripe_status': intent.status})
+        payments = Payment.objects.filter(
+            user_email=request.user.email
+        ).order_by('-created_at')[:20]
+        serializer = PaymentSerializer(payments, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     except Exception as e:
-        return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        logger.error(f"Error fetching payment history: {str(e)}")
+        return Response(
+            {'error': 'Failed to fetch payment history'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ===== 6. SUBSCRIPTION STATUS =====
 
 @api_view(['GET'])
 @permission_classes([IsAuthenticated])
 def subscription_status(request):
-    if request.user.role == 'platform_owner' or request.user.is_superuser:
-        return Response({
-            'status': 'active',
-            'plan': 'Platform Administrator',
-            'max_users': 9999,
-            'email_alerts': True,
-            'start_date': timezone.now().isoformat(),
-            'end_date': None,
-        })
-
-    org = getattr(request.user, 'organization', None)
-    if not org:
-        return Response({'status': 'none', 'error': 'No organization linked'})
-
-    _sync_expired_subscriptions(org=org)
-
-    # Get active subscription, with fallback to most recent subscription
-    sub = (
-        Subscription.objects.filter(organization=org, status='active')
-        .order_by('-created_at')
-        .first()
-    ) or (
-        Subscription.objects.filter(organization=org)
-        .order_by('-created_at')
-        .first()
-    )
-    
-    if sub:
-        return Response({
-            'status': sub.status,
-            'plan': sub.plan.display_name if sub.plan else None,
-            'max_users': sub.plan.max_users if sub.plan else None,
-            'email_alerts': sub.plan.email_alerts_enabled if sub.plan else False,
-            'start_date': sub.start_date.isoformat() if sub.start_date else None,
-            'end_date': sub.end_date.isoformat() if sub.end_date else None,
-        })
-    
-    return Response({'status': 'none'})
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_platform_stats(request):
-    if request.user.role != 'platform_owner':
-        return Response({'error': 'Unauthorized'}, status=status.HTTP_403_FORBIDDEN)
-
-    _sync_expired_subscriptions()
-    
-    total_users = User.objects.count()
-    total_orgs = Organization.objects.count()
-    active_orgs = Organization.objects.filter(is_active=True).count()
-    
-    # Calculate plan distribution
-    plans = SubscriptionPlan.objects.all()
-    plan_distribution = []
-    for plan in plans:
-        count = Subscription.objects.filter(plan=plan, status='active').count()
-        plan_distribution.append({
-            'name': plan.display_name,
-            'count': count
-        })
-    
-    # Add Not Subscribed count
-    not_subscribed_count = Organization.objects.filter(is_active=False).count()
-    if not_subscribed_count > 0:
-        plan_distribution.append({
-            'name': 'Not Subscribed',
-            'count': not_subscribed_count
-        })
-
-    # Detailed org list
-    orgs = Organization.objects.all()
-    org_list = []
-    for org in orgs:
-        # Prioritize active subscription
-        sub = Subscription.objects.filter(organization=org, status='active').order_by('-created_at').first()
-        if not sub:
-            sub = Subscription.objects.filter(organization=org).order_by('-created_at').first()
-        org_list.append({
-            'id': org.id,
-            'name': org.name,
-            'plan': sub.plan.display_name if sub and sub.plan else 'No License',
-            'users': org.users.count(),
-            'status': sub.status if sub else 'none',
-            'renewal': sub.end_date if sub else 'N/A'
-        })
-
-    return Response({
-        'total_users': total_users,
-        'total_organizations': total_orgs,
-        'active_organizations': active_orgs,
-        'plan_distribution': plan_distribution,
-        'organizations': org_list
-    })
-
-@api_view(['GET'])
-@permission_classes([IsAuthenticated])
-def get_subscription_history(request):
     """
-    Returns all subscription records for the user's organization.
+    GET /subscriptions/status/
+    Returns the user's current subscription status based on their organization
+    and most recent completed payment.
     """
-    org = getattr(request.user, 'organization', None)
-    if not org:
-        return Response({'error': 'No organization linked'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        user = request.user
+        org = getattr(user, 'organization', None)
 
-    _sync_expired_subscriptions(org=org)
-    
-    subscriptions = Subscription.objects.filter(organization=org).order_by('-created_at')
-    
-    history = []
-    for sub in subscriptions:
-        history.append({
-            'id': sub.id,
-            'plan_name': sub.plan.display_name if sub.plan else 'Unknown',
-            'status': sub.status,
-            'amount': float(sub.plan.price) if sub.plan else 0,
-            'start_date': sub.start_date.isoformat() if sub.start_date else None,
-            'end_date': sub.end_date.isoformat() if sub.end_date else None,
-            'created_at': sub.created_at.isoformat(),
-        })
-    
-    return Response(history)
+        # Get most recent completed payment
+        latest_payment = Payment.objects.filter(
+            user_email=user.email,
+            status='completed'
+        ).order_by('-created_at').first()
+
+        if org and org.is_active and latest_payment and latest_payment.plan:
+            plan = latest_payment.plan
+            status_text = 'active'
+        else:
+            status_text = 'inactive'
+            plan = None
+
+        # Derive start/end dates from payment date (30-day billing cycle)
+        start_date = latest_payment.created_at if latest_payment else None
+        end_date = (latest_payment.created_at + timedelta(days=30)) if latest_payment else None
+
+        return Response({
+            'status': status_text,
+            'plan': plan.display_name if plan else None,
+            'plan_id': plan.id if plan else None,
+            'max_users': plan.max_users if plan else 1,
+            'email_alerts': plan.email_alerts_enabled if plan else False,
+            'last_payment': latest_payment.created_at.isoformat() if latest_payment else None,
+            'start_date': start_date.isoformat() if start_date else None,
+            'end_date': end_date.isoformat() if end_date else None,
+            'organization': org.name if org else None,
+        }, status=status.HTTP_200_OK)
+
+    except Exception as e:
+        logger.error(f"Error fetching subscription status: {str(e)}")
+        return Response(
+            {'error': 'Failed to fetch subscription status'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )

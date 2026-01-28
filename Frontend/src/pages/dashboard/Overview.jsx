@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getProtocolStatistics, getThreatLevelDistribution } from '../../services/api';
+import { getProtocolStatistics, getThreatLevelDistribution, getTopSuspiciousIPs } from '../../services/api';
 
 /**
  * Overview page - Dashboard showing alert statistics
@@ -15,6 +15,9 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
     // Track threat level counts (safe, medium, high)
     const [threatStats, setThreatStats] = useState({});
     const [threatLoading, setThreatLoading] = useState(false);
+    // Track suspicious IPs (top attacking source IPs)
+    const [suspiciousIPs, setSuspiciousIPs] = useState([]);
+    const [suspiciousIPsLoading, setSuspiciousIPsLoading] = useState(false);
 
     // Fetch protocol statistics every 8 seconds (auto-refresh)
     useEffect(() => {
@@ -93,6 +96,40 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
 
         fetchThreatStats();
         interval = setInterval(fetchThreatStats, 8000);
+        
+        return () => {
+            isActive = false;
+            if (interval) clearInterval(interval);
+        };
+    }, [token, showOnlyIcon]);
+
+    useEffect(() => {
+        if (!token || showOnlyIcon) return;
+        
+        let isActive = true;
+        let interval = null;
+        
+        const fetchSuspiciousIPs = async () => {
+            if (!isActive) return;
+            setSuspiciousIPsLoading(true);
+            try {
+                const data = await getTopSuspiciousIPs(token);
+                if (isActive) {
+                    setSuspiciousIPs(data.results || []);
+                }
+            } catch (error) {
+                if (isActive) {
+                    console.error('Failed to fetch suspicious IPs:', error);
+                }
+            } finally {
+                if (isActive) {
+                    setSuspiciousIPsLoading(false);
+                }
+            }
+        };
+
+        fetchSuspiciousIPs();
+        interval = setInterval(fetchSuspiciousIPs, 8000);
         
         return () => {
             isActive = false;
@@ -211,6 +248,60 @@ const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
                         ) : (
                             <div className="text-gray-400 text-sm col-span-3">No protocol data available</div>
                         )}
+                    </div>
+                )}
+            </div>
+
+            <div className="bg-[#0d1117] border border-[#30363d] rounded-xl p-6">
+                <h2 className="text-white text-lg font-bold mb-4">Top Suspicious IPs</h2>
+                <p className="text-sm text-gray-400 mb-4">Most active source IPs generating alerts</p>
+                {suspiciousIPsLoading ? (
+                    <div className="text-gray-400 text-sm">Loading...</div>
+                ) : (
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                            <thead className="bg-[#161b22] border-b border-[#30363d]">
+                                <tr>
+                                    <th className="text-left px-4 py-3 text-gray-400 font-semibold">IP Address</th>
+                                    <th className="text-left px-4 py-3 text-gray-400 font-semibold">Alert Count</th>
+                                    <th className="text-left px-4 py-3 text-gray-400 font-semibold">Last Seen</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {suspiciousIPs.length > 0 ? (
+                                    suspiciousIPs.map((ip, idx) => {
+                                        const lastSeen = new Date(ip.last_seen);
+                                        const now = new Date();
+                                        const diffMinutes = Math.floor((now - lastSeen) / 60000);
+                                        let timeStr = '';
+                                        if (diffMinutes < 1) timeStr = 'Just now';
+                                        else if (diffMinutes < 60) timeStr = `${diffMinutes}m ago`;
+                                        else if (diffMinutes < 1440) timeStr = `${Math.floor(diffMinutes / 60)}h ago`;
+                                        else timeStr = `${Math.floor(diffMinutes / 1440)}d ago`;
+
+                                        return (
+                                            <tr key={idx} className="border-b border-[#222a35] hover:bg-[#161b22]">
+                                                <td className="px-4 py-3">
+                                                    <span className="font-mono text-blue-400">{ip.src_ip}</span>
+                                                </td>
+                                                <td className="px-4 py-3">
+                                                    <span className="inline-block bg-red-500/20 text-red-300 px-3 py-1 rounded font-bold">
+                                                        {ip.alert_count}
+                                                    </span>
+                                                </td>
+                                                <td className="px-4 py-3 text-gray-400 text-xs">{timeStr}</td>
+                                            </tr>
+                                        );
+                                    })
+                                ) : (
+                                    <tr>
+                                        <td colSpan={3} className="px-4 py-8 text-center text-gray-400 text-sm">
+                                            No suspicious IPs tracked yet
+                                        </td>
+                                    </tr>
+                                )}
+                            </tbody>
+                        </table>
                     </div>
                 )}
             </div>

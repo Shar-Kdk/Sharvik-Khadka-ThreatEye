@@ -1,19 +1,31 @@
 from django.urls import path
-from .views import get_plans, initiate_payment, verify_payment, subscription_status, get_platform_stats, get_subscription_history
+from .views import (
+    get_plans,
+    CreatePaymentIntentView,
+    VerifyPaymentView,
+    PaymentListView,
+    get_payment_history,
+    subscription_status,
+)
 
 # ===== SUBSCRIPTION & PAYMENT API ENDPOINTS =====
-# Manage subscription plans, process Stripe payments, track subscription status
+# Following React-Django-Stripe-Backend pattern
 urlpatterns = [
-    # GET: → list all subscription plans (Basic, Professional) with price and features
+    # GET: List all available subscription plans
     path('plans/', get_plans, name='get_plans'),
-    # POST: plan_id → create Stripe payment intent, return client secret for frontend
-    path('initiate/', initiate_payment, name='initiate_payment'),
-    # POST: payment_intent_id → verify payment completed, activate subscription
-    path('verify/', verify_payment, name='verify_payment'),
-    # GET: requires JWT → current user's subscription status (active/pending/expired)
+
+    # POST: { plan_id } → Create Stripe PaymentIntent → return clientSecret
+    path('create-payment-intent/', CreatePaymentIntentView.as_view(), name='create_payment_intent'),
+
+    # POST: { payment_intent_id } → Verify payment succeeded → activate org subscription
+    path('verify-payment/', VerifyPaymentView.as_view(), name='verify_payment'),
+
+    # GET: List all payments (admin sees all, user sees own)
+    path('payments/', PaymentListView.as_view(), name='payment_list'),
+
+    # GET: Payment history for current user (last 20)
+    path('payment-history/', get_payment_history, name='get_payment_history'),
+
+    # GET: Current subscription status for authenticated user
     path('status/', subscription_status, name='subscription_status'),
-    # GET: requires JWT → billing history for current organization
-    path('history/', get_subscription_history, name='get_subscription_history'),
-    # GET: requires admin token → platform-wide statistics (total users, revenue, etc.)
-    path('platform-stats/', get_platform_stats, name='platform_stats'),
 ]

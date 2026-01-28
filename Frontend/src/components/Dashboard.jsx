@@ -7,6 +7,7 @@ import OrganizationsList from '../pages/dashboard/OrganizationsList';
 import SubscriptionDetails from '../pages/dashboard/SubscriptionDetails';
 import SubscriptionHistory from '../pages/dashboard/SubscriptionHistory';
 import LiveTraffic from '../pages/dashboard/LiveTraffic';
+import { getSubscriptionStatus } from '../services/api';
 
 /**
  * Dashboard component - Main application layout after login
@@ -20,7 +21,6 @@ function Dashboard({ user, token, onLogout }) {
   // Profile dropdown menu visibility
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const profileMenuRef = useRef(null);
-  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
   const location = useLocation();
 
   // Check if user is a Platform Owner (system admin) vs Organization Admin
@@ -56,19 +56,8 @@ function Dashboard({ user, token, onLogout }) {
       try {
         if (!token) return;
 
-        const response = await fetch(`${API_BASE_URL}/subscriptions/status/`, {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
-
-        if (response.ok) {
-          const data = await response.json();
-          setSubscription(data);
-        } else {
-          console.error("Failed to fetch subscription status");
-          setSubscription({ status: 'error' });
-        }
+        const data = await getSubscriptionStatus(token);
+        setSubscription(data);
       } catch (error) {
         console.error("Error checking subscription:", error);
         setSubscription({ status: 'error' });

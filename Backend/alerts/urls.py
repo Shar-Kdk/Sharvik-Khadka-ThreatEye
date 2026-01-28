@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import live_alerts, threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics
+from .views import live_alerts, threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics, top_suspicious_ips
 
 # ===== ALERTS API ENDPOINTS =====
 # Real-time security alerts from Snort IDS and analytics endpoints
@@ -15,4 +15,6 @@ urlpatterns = [
     path('alerts-timeline/', alerts_timeline, name='alerts_timeline'),
     # GET: → count alerts by network protocol (TCP/UDP/ICMP) for breakdown chart
     path('protocol-statistics/', protocol_statistics, name='protocol_statistics'),
+    # GET: → top 5 most suspicious source IPs by alert frequency for IP tracking
+    path('top-suspicious-ips/', top_suspicious_ips, name='top_suspicious_ips'),
 ]

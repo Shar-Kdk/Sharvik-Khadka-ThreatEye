@@ -175,3 +175,35 @@ def protocol_statistics(request):
             for row in protocol_stats
         ]
     })
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def top_suspicious_ips(request):
+    """
+    Get top 5 most suspicious source IPs based on alert frequency
+    Shows: IP address, alert count, last seen timestamp
+    Used for Suspicious IPs tracking on dashboard
+    """
+    from django.db.models import Max
+    
+    # Get top 5 source IPs by alert count
+    top_ips = (
+        Alert.objects.values('src_ip')
+        .annotate(
+            alert_count=Count('id'),
+            last_seen=Max('timestamp')
+        )
+        .order_by('-alert_count')[:5]
+    )
+    
+    return Response({
+        'results': [
+            {
+                'src_ip': row['src_ip'],
+                'alert_count': row['alert_count'],
+                'last_seen': row['last_seen'].isoformat() if row['last_seen'] else None,
+            }
+            for row in top_ips
+        ]
+    })
