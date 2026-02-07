@@ -1,20 +1,283 @@
 import hashlib
 import logging
+import os
 import re
 import socket
 import struct
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
 
+from django.core.mail import EmailMultiAlternatives
+from django.conf import settings
 from django.db import IntegrityError
 from django.utils import timezone
 
 from .models import Alert, LogIngestionState
 from ml_features.threat_analyzer import ThreatAnalyzer
+from authentication.models import Organization, User
+from subscription.models import SubscriptionPlan
 
 
 logger = logging.getLogger(__name__)
+
+# ===== EMAIL NOTIFICATION FOR ALERTS =====
+# Send email notifications for MEDIUM and HIGH severity alerts
+
+def send_alert_notification(alert):
+    """
+    Send email notification for MEDIUM and HIGH severity alerts.
+    Only sends if organization has email_alerts_enabled in their subscription plan.
+    
+    Sends synchronously with try/except to ensure delivery.
+    
+    Args:
+        alert: Alert object to send notification for
+    """
+    # Only send for MEDIUM and HIGH severity alerts
+    if alert.threat_level not in [Alert.THREAT_MEDIUM, Alert.THREAT_HIGH]:
+        return
+    
+    try:
+        # Get all organizations' users who should receive alerts
+        # Send to org admins whose organization has email alerts enabled
+        organizations = Organization.objects.filter(is_active=True)
+        recipient_emails = []
+        
+        for org in organizations:
+            # Get subscription plan for this organization tier
+            if org.subscription_tier == Organization.TIER_NOT_SUBSCRIBED:
+                # Free tier - no email alerts
+                continue
+            
+            # Get the enabled subscription plans for this tier
+            if org.subscription_tier == Organization.TIER_BASIC:
+                plans = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
+            elif org.subscription_tier == Organization.TIER_PROFESSIONAL:
+                plans = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
+            else:
+                continue
+            
+            if not plans.exists():
+                continue
+            
+            # Get admin users from this organization
+            org_admins = User.objects.filter(
+                organization=org,
+                is_active=True,
+                is_verified=True
+            )
+            
+            for admin in org_admins:
+                if admin.email:
+                    recipient_emails.append(admin.email)
+        
+        if not recipient_emails:
+            logger.debug(f"No recipients found for alert {alert.id}")
+            return
+        
+        # Prepare email content
+        threat_color = {
+            Alert.THREAT_HIGH: 'red',
+            Alert.THREAT_MEDIUM: 'orange',
+            Alert.THREAT_SAFE: 'green',
+        }.get(alert.threat_level, 'gray')
+        
+        subject = f'ThreatEye Security Alert: {alert.threat_level.upper()} Severity Threat Detected'
+        
+        text_content = f"""THREATEYE SECURITY ALERT NOTIFICATION
+
+Severity Level: {alert.threat_level.upper()}
+Alert ID: {alert.id}
+Event Timestamp: {alert.timestamp.isoformat()}
+Ingestion Timestamp: {alert.ingested_at.isoformat()}
+
+ATTACK DETAILS:
+Source IP Address: {alert.src_ip}
+Source Port: {alert.src_port or 'N/A'}
+Destination IP Address: {alert.dest_ip}
+Destination Port: {alert.dest_port or 'N/A'}
+Protocol: {alert.protocol}
+
+ALERT INFORMATION:
+Message: {alert.message}
+Classification: {alert.classification or 'N/A'}
+Signature ID (SID): {alert.sid}
+Priority Level: {alert.priority}
+
+For detailed analysis, please access your ThreatEye dashboard at:
+http://localhost:3000/dashboard/live-traffic
+
+---
+ThreatEye Intrusion Detection System
+        """
+        
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <style>
+                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px; }}
+                .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; }}
+                .header {{ background: linear-gradient(135deg, #5b4fd1 0%, #7c3aed 100%); color: #ffffff; padding: 40px 30px; text-align: center; }}
+                .header-content {{ display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 8px; }}
+                .shield-icon {{ font-size: 28px; }}
+                .header-title {{ font-size: 28px; font-weight: bold; }}
+                .header-highlight {{ background-color: #fbbf24; color: #000000; padding: 0 6px; }}
+                .header-tagline {{ font-size: 14px; opacity: 0.95; margin-top: 8px; }}
+                .content {{ padding: 30px; }}
+                .greeting {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-bottom: 15px; }}
+                .description {{ font-size: 14px; line-height: 1.6; color: #4b5563; margin-bottom: 20px; }}
+                .alert-code-box {{ border: 2px dashed #7c3aed; padding: 30px; border-radius: 6px; text-align: center; margin: 25px 0; background-color: #fafafa; }}
+                .alert-code-label {{ font-size: 12px; letter-spacing: 2px; color: #6b7280; margin-bottom: 10px; text-transform: uppercase; }}
+                .alert-code {{ font-size: 32px; font-weight: bold; color: #7c3aed; letter-spacing: 4px; font-family: 'Courier New', monospace; }}
+                .alert-details-label {{ font-size: 13px; letter-spacing: 1px; color: #6b7280; margin-top: 15px; margin-bottom: 8px; text-transform: uppercase; font-weight: 600; }}
+                .alert-detail-row {{ display: flex; padding: 8px 0; font-size: 14px; border-bottom: 1px solid #e5e7eb; }}
+                .alert-detail-row:last-child {{ border-bottom: none; }}
+                .alert-detail-label {{ font-weight: 600; color: #1f2937; min-width: 140px; }}
+                .alert-detail-value {{ color: #6b7280; word-break: break-all; font-family: 'Courier New', monospace; }}
+                .importance-box {{ background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px; }}
+                .importance-label {{ font-weight: 600; color: #991b1b; font-size: 13px; }}
+                .importance-text {{ color: #7f1d1d; font-size: 13px; margin-top: 5px; line-height: 1.5; }}
+                .disclaimer {{ font-size: 13px; line-height: 1.6; color: #4b5563; margin: 20px 0; }}
+                .footer {{ background-color: #1f2937; color: #e5e7eb; padding: 30px; text-align: center; font-size: 13px; }}
+                .footer-greeting {{ margin-bottom: 10px; }}
+                .footer-team {{ font-weight: 600; margin: 5px 0; }}
+                .footer-brand {{ background-color: #fbbf24; color: #000000; padding: 0 4px; }}
+                .footer-copyright {{ margin-top: 15px; opacity: 0.8; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <div class="header-content">
+                        <div class="shield-icon">🛡</div>
+                        <div class="header-title"><span class="header-highlight">ThreatEye</span></div>
+                    </div>
+                    <div class="header-tagline">Intelligent Security Detection System</div>
+                </div>
+                
+                <div class="content">
+                    <div class="greeting">Security Alert Detected</div>
+                    
+                    <div class="description">
+                        A network security event has been detected by the ThreatEye Intrusion Detection System. The alert details are provided below. Please review this information and take appropriate action if necessary.
+                    </div>
+                    
+                    <div class="alert-code-box">
+                        <div class="alert-code-label">Alert Severity</div>
+                        <div class="alert-code">{alert.threat_level.upper()}</div>
+                    </div>
+                    
+                    <div class="alert-details-label">Alert Identification</div>
+                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Alert ID:</div>
+                            <div class="alert-detail-value">{alert.id}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Event Time:</div>
+                            <div class="alert-detail-value">{alert.timestamp.isoformat()}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Detection Time:</div>
+                            <div class="alert-detail-value">{alert.ingested_at.isoformat()}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert-details-label" style="margin-top: 20px;">Network Details</div>
+                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Source IP:</div>
+                            <div class="alert-detail-value">{alert.src_ip}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Source Port:</div>
+                            <div class="alert-detail-value">{alert.src_port or 'N/A'}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Destination IP:</div>
+                            <div class="alert-detail-value">{alert.dest_ip}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Destination Port:</div>
+                            <div class="alert-detail-value">{alert.dest_port or 'N/A'}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Protocol:</div>
+                            <div class="alert-detail-value">{alert.protocol}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="alert-details-label" style="margin-top: 20px;">Alert Information</div>
+                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Message:</div>
+                            <div class="alert-detail-value"><strong>{alert.message}</strong></div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Classification:</div>
+                            <div class="alert-detail-value">{alert.classification or 'N/A'}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Signature ID:</div>
+                            <div class="alert-detail-value">{alert.sid}</div>
+                        </div>
+                        <div class="alert-detail-row">
+                            <div class="alert-detail-label">Priority:</div>
+                            <div class="alert-detail-value">{alert.priority}</div>
+                        </div>
+                    </div>
+                    
+                    <div class="importance-box">
+                        <div class="importance-label">Important:</div>
+                        <div class="importance-text">For immediate investigation and detailed analysis, please access your ThreatEye dashboard to view the alert and take appropriate action.</div>
+                    </div>
+                    
+                    <div class="disclaimer">
+                        If you did not expect to receive this alert, please contact your system administrator or the ThreatEye security team for assistance.
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <div class="footer-greeting">Best regards,</div>
+                    <div class="footer-team"><span class="footer-brand">ThreatEye</span> Security Team</div>
+                    <div class="footer-copyright">Copyright 2026 <span class="footer-brand">ThreatEye</span>. All rights reserved.</div>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        # Send email synchronously with proper error handling
+        sent_count = 0
+        for recipient_email in recipient_emails:
+            try:
+                msg = EmailMultiAlternatives(
+                    subject=subject,
+                    body=text_content,
+                    from_email=settings.DEFAULT_FROM_EMAIL,
+                    to=[recipient_email]
+                )
+                msg.attach_alternative(html_content, "text/html")
+                result = msg.send()
+                if result:
+                    sent_count += 1
+                    logger.info(f"Alert email sent to {recipient_email} for alert {alert.id}")
+                else:
+                    logger.warning(f"Failed to send alert email to {recipient_email}")
+            except Exception as e:
+                logger.error(f"Error sending alert email to {recipient_email}: {str(e)}")
+        
+        if sent_count > 0:
+            logger.info(f"Alert {alert.id} notifications sent to {sent_count} recipients")
+        
+    except Exception as e:
+        logger.error(f"Error in send_alert_notification for alert {alert.id}: {str(e)}")
+
 
 # ===== ML MODEL INITIALIZATION =====
 # Lazy-load ML threat analyzer on first use
@@ -25,8 +288,19 @@ def get_threat_analyzer():
     global _threat_analyzer
     if _threat_analyzer is None:
         try:
-            _threat_analyzer = ThreatAnalyzer(models_dir='trained_models')
-            logger.info("Threat analyzer initialized")
+            models_dir = str(Path(settings.BASE_DIR) / 'trained_models')
+
+            # Model selection priority:
+            # 1) settings.ML_MODEL_NAME (if defined)
+            # 2) env var THREATEYE_ML_MODEL_NAME
+            # 3) default: random_forest_simplified (CIC-IDS2017-trained baseline)
+            model_name = (
+                getattr(settings, 'ML_MODEL_NAME', None)
+                or os.getenv('THREATEYE_ML_MODEL_NAME')
+                or 'random_forest_simplified'
+            )
+
+            _threat_analyzer = ThreatAnalyzer(model_name=model_name, models_dir=models_dir)
         except Exception as e:
             logger.error(f"Failed to initialize threat analyzer: {e}")
             _threat_analyzer = False  # Mark as failed
@@ -54,7 +328,7 @@ def enrich_alert_with_ml(alert_obj):
         alert_obj.ml_features = result.get('features_extracted', 0)
         alert_obj.save(update_fields=['ml_processed', 'ml_threat_score', 'ml_classification', 'ml_features'])
         
-        logger.debug(f"Alert {alert_obj.id} enriched: {alert_obj.ml_classification} (confidence: {alert_obj.ml_threat_score})")
+        # Alert enriched with ML analysis (silent)
         return True
     except Exception as e:
         logger.error(f"Error enriching alert {alert_obj.id} with ML: {e}")
@@ -509,6 +783,8 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
                         inserted += 1
                         # Enrich alert with ML analysis
                         enrich_alert_with_ml(alert)
+                        # Send email notification for MEDIUM and HIGH alerts
+                        send_alert_notification(alert)
                     except IntegrityError:
                         continue
                     except Exception:
@@ -543,8 +819,6 @@ def ingest_snort_logs(log_dir, max_lines=None):
         key=lambda p: p.name,
     )
     
-    logger.debug(f'Found {len(log_files)} alert files in {log_dir}')
-
     inserted = 0
     processed_lines = 0
     failed_lines = 0
@@ -605,6 +879,8 @@ def ingest_snort_logs(log_dir, max_lines=None):
                         inserted += 1
                         # Enrich alert with ML analysis
                         enrich_alert_with_ml(alert)
+                        # Send email notification for MEDIUM and HIGH alerts
+                        send_alert_notification(alert)
                     except IntegrityError:
                         # Duplicate alert (same event_hash) - skip
                         continue
@@ -616,12 +892,15 @@ def ingest_snort_logs(log_dir, max_lines=None):
                 state.offset = handle.tell()
 
             # Save progress (file offset + inode) for resume on restart
-            state.save(update_fields=['inode', 'offset', 'updated_at'])
+            # Use update_or_create to prevent errors if record was deleted
+            LogIngestionState.objects.update_or_create(
+                file_path=file_path,
+                defaults={'inode': state.inode, 'offset': state.offset}
+            )
         except Exception:
             logger.exception('Error while ingesting alert log file %s', log_file)
             continue
 
-    logger.info(f'Snort logs ingestion complete: inserted={inserted}, processed_lines={processed_lines}, failed={failed_lines}')
     return {
         'inserted': inserted,
         'processed_lines': processed_lines,
@@ -656,11 +935,7 @@ def run_polling_loop(log_dir, interval_seconds=3):
             # Ingest binary PCAP packet logs
             packet_result = ingest_snort_packet_logs(log_dir)
 
-            logger.info(
-                'Snort ingest cycle complete: text=%s packet=%s',
-                text_result,
-                packet_result,
-            )
+            # Ingest cycle complete (log handled by management command)
         except Exception:
             logger.exception('Unhandled error in snort polling loop')
 

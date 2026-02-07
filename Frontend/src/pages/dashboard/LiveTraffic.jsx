@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { getLiveAlerts } from '../../services/api';
 import Pagination from '../../components/common/Pagination';
 
 const MAX_ROWS_PER_PAGE = 50;
 const MAX_ITEMS_PER_PAGE = 500;
+
+const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
+const POLL_INTERVAL = 3000; // Poll every 3 seconds
 
 const THREAT_STYLES = {
   safe: 'bg-green-500/20 text-green-300 border border-green-400/30',
@@ -33,30 +36,47 @@ export default function LiveTraffic({ token }) {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(MAX_ROWS_PER_PAGE);
+  const seenAlertIdsRef = useRef(new Set());
 
+  // Fetch alerts only on initial page load
   useEffect(() => {
     let active = true;
 
     const fetchAlerts = async () => {
+      console.log('[LiveTraffic] Starting fetch with token:', token ? token.substring(0, 20) + '...' : 'NO TOKEN');
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
       try {
-        const livePayload = await getLiveAlerts(token, 500, controller.signal);
+        const livePayload = await getLiveAlerts(token, MAX_ITEMS_PER_PAGE, controller.signal);
+        console.log('[LiveTraffic] Fetch succeeded, got', livePayload?.results?.length || 0, 'results');
 
         if (!active) {
           return;
         }
 
-        setAlerts(livePayload.results || []);
+        const results = livePayload.results || [];
+        // CRITICAL FIX: Merge with WS updates that arrived during fetch
+        // Fetch results and merge with previous data
+        setAlerts((prev) => {
+          const seenIds = new Set(results.map(r => r.id));
+          const merged = [
+            ...results,  // Fresh REST data first
+            ...prev.filter(p => !seenIds.has(p.id))  // Keep WS-added alerts not in REST
+          ];
+          seenAlertIdsRef.current = new Set(merged.map(a => a.id));
+          console.log('[LiveTraffic] Merged alerts, total now:', merged.length);
+          return merged.slice(0, MAX_ITEMS_PER_PAGE);
+        });
         setError('');
         setLastSyncedAt(new Date());
       } catch (err) {
+        console.error('[LiveTraffic] Fetch failed:', err);
         if (!active) {
           return;
         }
         if (err?.name === 'AbortError') {
-          setError('Live traffic request timed out. Retrying...');
+          setError('Initial load timed out. Please refresh.');
         } else {
           setError(err.message || 'Failed to fetch live traffic');
         }
@@ -69,7 +89,53 @@ export default function LiveTraffic({ token }) {
     };
 
     fetchAlerts();
-    const intervalId = setInterval(fetchAlerts, 5000);
+
+    return () => {
+      active = false;
+    };
+  }, [token]);
+
+  // Polling for live updates (replaces WebSocket)
+  useEffect(() => {
+    if (!token) {
+      return;
+    }
+
+    let active = true;
+    let intervalId;
+
+    const poll = async () => {
+      try {
+        const livePayload = await getLiveAlerts(token, MAX_ITEMS_PER_PAGE);
+        if (!active) {
+          return;
+        }
+
+        const results = livePayload.results || [];
+        setAlerts((prev) => {
+          const seenIds = new Set(results.map(r => r.id));
+          const merged = [
+            ...results,
+            ...prev.filter(p => !seenIds.has(p.id))
+          ];
+          seenAlertIdsRef.current = new Set(merged.map(a => a.id));
+          return merged.slice(0, MAX_ITEMS_PER_PAGE);
+        });
+        setLastSyncedAt(new Date());
+        setError('');
+      } catch (err) {
+        console.error('[LiveTraffic] Polling failed:', err);
+        if (active) {
+          setError('Failed to fetch live traffic. Retrying...');
+        }
+      }
+    };
+
+    // Initial poll
+    poll();
+
+    // Set up polling interval
+    intervalId = setInterval(poll, POLL_INTERVAL);
 
     return () => {
       active = false;

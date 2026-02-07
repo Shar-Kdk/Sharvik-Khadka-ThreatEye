@@ -16,3 +16,13 @@ html, body, #root {
   background-color: #0d1117;
   overscroll-behavior: none;
 }
+
+/* Hide scrollbars but keep scrolling (used for dropdown lists, etc.) */
+.no-scrollbar {
+  -ms-overflow-style: none; /* IE and Edge */
+  scrollbar-width: none; /* Firefox */
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none; /* Chrome, Safari, Opera */
+}

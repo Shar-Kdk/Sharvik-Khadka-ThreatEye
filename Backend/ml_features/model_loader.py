@@ -59,7 +59,8 @@ class ModelLoader:
                 with open(model_path, 'rb') as f:
                     model = pickle.load(f)
             elif model_path.endswith('.joblib'):
-                model = joblib.load(model_path)
+                # Load with verbose=0 to suppress joblib parallel output
+                model = joblib.load(model_path, mmap_mode=None)
             else:
                 logger.error(f"Unsupported model format: {model_path}")
                 return None

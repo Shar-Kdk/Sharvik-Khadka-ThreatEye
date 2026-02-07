@@ -6,7 +6,7 @@ import { useStripe, useElements, CardNumberElement, CardExpiryElement, CardCvcEl
  * Takes card details and confirms payment with Stripe
  * Used for subscription plan purchases
  */
-const StripePaymentForm = ({ clientSecret, onPaymentSuccess, planName, amount }) => {
+const StripePaymentForm = ({ clientSecret, onPaymentSuccess, amount }) => {
     const stripe = useStripe();
     const elements = useElements();
     const [cardHolder, setCardHolder] = useState('');

@@ -3,7 +3,7 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework_simplejwt.tokens import RefreshToken
 from .serializers import LoginSerializer, UserSerializer, EmailVerificationSerializer, ResendVerificationSerializer
 from .email_utils import send_verification_email
@@ -11,6 +11,8 @@ from .models import User, Organization
 
 
 class LoginView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         """Authenticate user and return JWT token."""
         serializer = LoginSerializer(data=request.data)
@@ -31,6 +33,8 @@ class LoginView(APIView):
 
 
 class VerifyEmailView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         """Verify email with verification code."""
         serializer = EmailVerificationSerializer(data=request.data)
@@ -57,6 +61,8 @@ class VerifyEmailView(APIView):
 
 
 class ResendVerificationCodeView(APIView):
+    permission_classes = [AllowAny]
+
     def post(self, request):
         """Generate new verification code and send email."""
         serializer = ResendVerificationSerializer(data=request.data)

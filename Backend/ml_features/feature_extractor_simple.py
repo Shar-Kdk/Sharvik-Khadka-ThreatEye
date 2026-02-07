@@ -54,7 +54,7 @@ class SimplifiedFeatureExtractor:
     }
 
     # Known Snort SIDs for normalization range
-    MAX_SID_FOR_NORMALIZATION = 1000000  # Approximate max SID value
+    MAX_SID_FOR_NORMALIZATION = 100_000_000  # Approximate max SID value
 
     @staticmethod
     def _is_internal_ip(ip_str: str) -> int:

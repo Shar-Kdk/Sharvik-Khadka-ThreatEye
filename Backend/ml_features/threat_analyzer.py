@@ -70,9 +70,25 @@ class ThreatAnalyzer:
                     'error': f'Feature extraction failed: {str(e)}',
                 }
             
-            # Make prediction
-            prediction = self.model.predict([features])[0]
-            confidence = max(self.model.predict_proba([features])[0])
+            # Make prediction (verbose=0 suppresses joblib parallel output)
+            # Set model verbosity to 0 if available
+            original_verbose = getattr(self.model, 'verbose', 0)
+            if hasattr(self.model, 'verbose'):
+                self.model.verbose = 0
+            
+            try:
+                prediction = self.model.predict([features])[0]
+
+                # Treat confidence as probability of the ATTACK class (class label 1) when available
+                proba = self.model.predict_proba([features])[0]
+                try:
+                    classes = list(getattr(self.model, 'classes_', []))
+                    confidence = float(proba[classes.index(1)]) if 1 in classes else float(max(proba))
+                except Exception:
+                    confidence = float(max(proba))
+            finally:
+                if hasattr(self.model, 'verbose'):
+                    self.model.verbose = original_verbose
             
             return {
                 'alert_id': alert_id,

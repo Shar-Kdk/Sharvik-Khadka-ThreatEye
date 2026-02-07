@@ -1,6 +1,6 @@
 import { Link, useLocation } from 'react-router-dom';
 
-const Sidebar = ({ onLogout, isPlatformOwner }) => {
+const Sidebar = ({ isPlatformOwner }) => {
     const location = useLocation();
 
     const menuItems = isPlatformOwner ? [

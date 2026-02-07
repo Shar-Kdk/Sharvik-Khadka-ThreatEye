@@ -42,9 +42,32 @@ const Pagination = ({
     };
 
     return (
-        <div className="p-4 border-t border-[#30363d] bg-[#161b22]/30 flex items-center justify-center">
+        <div className="p-4 border-t border-[#30363d] bg-[#161b22]/30 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+                <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">Rows</span>
+                <select
+                    value={itemsPerPage}
+                    onChange={(event) => {
+                        const nextValue = Number(event.target.value);
+                        if (Number.isFinite(nextValue) && nextValue > 0) {
+                            onItemsPerPageChange(nextValue);
+                        }
+                    }}
+                    className="bg-[#0d1117] border border-[#30363d] rounded-md px-2 py-1 text-[10px] font-bold text-gray-200 focus:outline-none focus:border-blue-500"
+                >
+                    {itemsPerPageOptions.map((option) => (
+                        <option key={option} value={option}>
+                            {option}
+                        </option>
+                    ))}
+                </select>
+                <span className="text-[10px] text-gray-500 font-bold">
+                    Page {currentPage} / {totalPages}
+                </span>
+            </div>
+
             {/* Center: Pagination Controls */}
-            <div className="flex items-center space-x-2">
+            <div className="flex items-center space-x-2 justify-center flex-1">
                 <button
                     onClick={() => onPageChange(currentPage - 1)}
                     disabled={currentPage === 1}
@@ -70,6 +93,10 @@ const Pagination = ({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7" />
                     </svg>
                 </button>
+            </div>
+
+            <div className="text-[10px] text-gray-500 font-bold tabular-nums">
+                {totalItems.toLocaleString()} total
             </div>
         </div>
     );

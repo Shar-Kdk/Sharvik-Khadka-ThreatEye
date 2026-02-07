@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements } from '@stripe/react-stripe-js';
 import StripePaymentForm from '../components/StripePaymentForm';
@@ -24,12 +24,7 @@ const SubscriptionPlans = ({ token }) => {
     const [currentPlanId, setCurrentPlanId] = useState(null);
     const navigate = useNavigate();
 
-    useEffect(() => {
-        fetchPlans();
-        fetchCurrentPlan();
-    }, []);
-
-    const fetchPlans = async () => {
+    const fetchPlans = useCallback(async () => {
         try {
             setError('');
             setLoading(true);
@@ -41,9 +36,9 @@ const SubscriptionPlans = ({ token }) => {
         } finally {
             setLoading(false);
         }
-    };
+    }, [token]);
 
-    const fetchCurrentPlan = async () => {
+    const fetchCurrentPlan = useCallback(async () => {
         try {
             if (!token) return;
             const data = await getSubscriptionStatus(token);
@@ -53,7 +48,12 @@ const SubscriptionPlans = ({ token }) => {
         } catch (err) {
             console.error('Error fetching current plan:', err);
         }
-    };
+    }, [token]);
+
+    useEffect(() => {
+        fetchPlans();
+        fetchCurrentPlan();
+    }, [fetchPlans, fetchCurrentPlan]);
 
     const handlePlanSelect = async (plan) => {
         setSelectError('');
@@ -221,7 +221,6 @@ const SubscriptionPlans = ({ token }) => {
                                     <StripePaymentForm
                                         clientSecret={clientSecret}
                                         onPaymentSuccess={handlePaymentSuccess}
-                                        planName={selectedPlan.display_name}
                                         amount={selectedPlan.price}
                                     />
                                 </Elements>

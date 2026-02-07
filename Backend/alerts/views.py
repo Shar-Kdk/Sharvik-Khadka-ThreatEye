@@ -207,3 +207,40 @@ def top_suspicious_ips(request):
             for row in top_ips
         ]
     })
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def send_alert_email(request):
+    """
+    Manually trigger email notification for a specific alert.
+    Used for testing or manual notifications.
+    
+    Request body: { "alert_id": 123 }
+    """
+    from .services import send_alert_notification
+    
+    alert_id = request.data.get('alert_id')
+    
+    if not alert_id:
+        return Response({'error': 'alert_id is required'}, status=400)
+    
+    try:
+        alert = Alert.objects.get(id=alert_id)
+    except Alert.DoesNotExist:
+        return Response({'error': f'Alert with id {alert_id} not found'}, status=404)
+    
+    # Send notification
+    send_alert_notification(alert)
+    
+    return Response({
+        'success': True,
+        'message': f'Alert notification queued for alert {alert_id}',
+        'alert': {
+            'id': alert.id,
+            'threat_level': alert.threat_level,
+            'message': alert.message,
+            'timestamp': alert.timestamp.isoformat(),
+        }
+    })
+

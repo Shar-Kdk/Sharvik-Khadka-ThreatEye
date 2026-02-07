@@ -25,7 +25,7 @@ const OrganizationsList = ({ token }) => {
             }
         };
         fetchOrgs();
-    }, [token]);
+    }, [token, API_BASE_URL]);
 
     // Pagination Logic
     const lastItemIndex = currentPage * itemsPerPage;

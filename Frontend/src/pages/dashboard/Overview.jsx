@@ -7,7 +7,7 @@ import { getProtocolStatistics, getThreatLevelDistribution, getTopSuspiciousIPs 
  * Auto-refreshes every 8 seconds to show real-time data
  * Can also show minimal profile icon mode (showOnlyIcon=true)
  */
-const Overview = ({ user, subscription, token, showOnlyIcon = false }) => {
+const Overview = ({ user, token, showOnlyIcon = false }) => {
     const [showProfilePopup, setShowProfilePopup] = useState(false);
     // Track protocol statistics (TCP, UDP, ICMP counts)
     const [protocolStats, setProtocolStats] = useState([]);

@@ -13,11 +13,24 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 
 import os
 from pathlib import Path
+import warnings
+
+# Suppress noisy library warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings('ignore', message='.*InconsistentVersionWarning.*')
+
 from dotenv import load_dotenv
-load_dotenv()
 
 # ===== PROJECT PATHS =====
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Load environment variables from .env file (two parent dirs up from settings.py/Backend)
+env_path = BASE_DIR.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+else:
+    # Fallback: load from Backend/.env
+    load_dotenv(BASE_DIR / '.env')
 
 
 # ===== CORE DJANGO SETTINGS =====
@@ -234,13 +247,21 @@ LOGGING = {
         },
         'alerts': {
             'handlers': ['console'],
-            'level': 'DEBUG',
+            'level': 'ERROR',
             'propagate': True,
         },
         'authentication': {
             'handlers': ['console'],
             'level': 'DEBUG',
             'propagate': True,
+        },
+        'joblib': {
+            'level': 'WARNING',
+            'propagate': False,
+        },
+        'sklearn': {
+            'level': 'WARNING',
+            'propagate': False,
         },
     },
 }

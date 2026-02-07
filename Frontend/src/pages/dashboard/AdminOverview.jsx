@@ -23,7 +23,7 @@ const AdminOverview = ({ token }) => {
             }
         };
         fetchStats();
-    }, [token]);
+    }, [token, API_BASE_URL]);
 
     if (loading) return <div className="text-gray-500 animate-pulse font-medium">Syncing Platform Metrics...</div>;
     if (!stats) return <div className="text-red-500 font-medium">Failed to load platform metrics.</div>;

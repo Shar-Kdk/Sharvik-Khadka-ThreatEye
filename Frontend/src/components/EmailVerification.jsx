@@ -53,6 +53,7 @@ function EmailVerification({ email, onVerified, onBack }) {
         setError(data.error || 'Verification failed. Please check your code.');
       }
     } catch (err) {
+      console.error('Email verification error:', err);
       setError('Network error. Please try again.');
     } finally {
       setLoading(false);
@@ -96,6 +97,7 @@ function EmailVerification({ email, onVerified, onBack }) {
         setError(data.error || 'Failed to resend code.');
       }
     } catch (err) {
+      console.error('Resend verification error:', err);
       setError('Network error. Please try again.');
     } finally {
       setLoading(false);

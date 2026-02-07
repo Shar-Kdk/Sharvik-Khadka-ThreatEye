@@ -1,19 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 const SubscriptionSuccess = () => {
     const [searchParams] = useSearchParams();
-    const [txnId, setTxnId] = useState('');
-
-    useEffect(() => {
-        const txn = searchParams.get('txn');
-        const sessionId = searchParams.get('session_id');
-        if (txn) {
-            setTxnId(txn);
-        } else if (sessionId) {
-            setTxnId(sessionId);
-        }
-    }, [searchParams]);
+    const txnId = searchParams.get('txn') || searchParams.get('session_id') || '';
 
     return (
         <div className="min-h-screen bg-gray-900 text-white flex items-center justify-center font-sans p-4">
