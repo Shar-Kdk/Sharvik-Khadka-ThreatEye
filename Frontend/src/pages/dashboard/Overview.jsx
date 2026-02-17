@@ -1,141 +1,87 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { getProtocolStatistics, getThreatLevelDistribution, getTopSuspiciousIPs } from '../../services/api';
 
 /**
  * Overview page - Dashboard showing alert statistics
  * Displays: protocol distribution, threat levels, recent alerts
- * Auto-refreshes every 8 seconds to show real-time data
- * Can also show minimal profile icon mode (showOnlyIcon=true)
+ * Real-time: receives latestWsAlert from Dashboard and refreshes data when new alerts arrive.
  */
-const Overview = ({ user, token, showOnlyIcon = false }) => {
+const Overview = ({ user, token, showOnlyIcon = false, latestWsAlert, wsClearSignal }) => {
     const [showProfilePopup, setShowProfilePopup] = useState(false);
-    // Track protocol statistics (TCP, UDP, ICMP counts)
     const [protocolStats, setProtocolStats] = useState([]);
     const [protocolLoading, setProtocolLoading] = useState(false);
-    // Track threat level counts (safe, medium, high)
     const [threatStats, setThreatStats] = useState({});
     const [threatLoading, setThreatLoading] = useState(false);
-    // Track suspicious IPs (top attacking source IPs)
     const [suspiciousIPs, setSuspiciousIPs] = useState([]);
     const [suspiciousIPsLoading, setSuspiciousIPsLoading] = useState(false);
+    const [lastRefreshAt, setLastRefreshAt] = useState(new Date());
 
-    // Fetch protocol statistics every 8 seconds (auto-refresh)
-    useEffect(() => {
+    // Consolidated refresh function
+    const refreshAllStats = useCallback(async () => {
         if (!token || showOnlyIcon) return;
         
-        let isActive = true;
-        let interval = null;
-        
-        // Fetch protocol stats from API
-        const fetchProtocolStats = async () => {
-            if (!isActive) return;
-            setProtocolLoading(true);
-            try {
-                const stats = await getProtocolStatistics(token);
-                if (isActive) {
-                    setProtocolStats(stats.results || []);
-                }
-            } catch (error) {
-                if (isActive) {
-                    console.error('Failed to fetch protocol statistics:', error);
-                }
-            } finally {
-                if (isActive) {
-                    setProtocolLoading(false);
-                }
-            }
-        };
+        // Protocol Stats
+        setProtocolLoading(true);
+        try {
+            const stats = await getProtocolStatistics(token);
+            setProtocolStats(stats.results || []);
+        } catch (error) {
+            console.error('Failed to fetch protocol statistics:', error);
+        } finally {
+            setProtocolLoading(false);
+        }
 
-        fetchProtocolStats();
-        interval = setInterval(fetchProtocolStats, 8000);
-        
-        return () => {
-            isActive = false;
-            if (interval) clearInterval(interval);
-        };
+        // Threat Distribution
+        setThreatLoading(true);
+        try {
+            const data = await getThreatLevelDistribution(token);
+            const counts = { safe: 0, medium: 0, high: 0 };
+            (data.results || []).forEach(item => {
+                const level = item.threat_level?.toLowerCase().trim() || '';
+                if (level === 'safe') counts.safe = item.count;
+                else if (level === 'medium') counts.medium = item.count;
+                else if (level === 'high') counts.high = item.count;
+            });
+            setThreatStats(counts);
+        } catch (error) {
+            console.error('Failed to fetch threat statistics:', error);
+        } finally {
+            setThreatLoading(false);
+        }
+
+        // Suspicious IPs
+        setSuspiciousIPsLoading(true);
+        try {
+            const data = await getTopSuspiciousIPs(token);
+            setSuspiciousIPs(data.results || []);
+        } catch (error) {
+            console.error('Failed to fetch suspicious IPs:', error);
+        } finally {
+            setSuspiciousIPsLoading(false);
+        }
+
+        setLastRefreshAt(new Date());
     }, [token, showOnlyIcon]);
 
+    // Initial load
     useEffect(() => {
-        if (!token || showOnlyIcon) return;
-        
-        let isActive = true;
-        let interval = null;
-        
-        const fetchThreatStats = async () => {
-            if (!isActive) return;
-            setThreatLoading(true);
-            try {
-                const data = await getThreatLevelDistribution(token);
-                if (!isActive) return;
-                
-                const counts = { safe: 0, medium: 0, high: 0 };
-                (data.results || []).forEach(item => {
-                    const level = item.threat_level?.toLowerCase().trim() || '';
-                    if (level === 'safe') {
-                        counts.safe = item.count;
-                    } else if (level === 'medium') {
-                        counts.medium = item.count;
-                    } else if (level === 'high') {
-                        counts.high = item.count;
-                    }
-                });
-                
-                if (isActive) {
-                    setThreatStats(counts);
-                }
-            } catch (error) {
-                if (isActive) {
-                    console.error('Failed to fetch threat statistics:', error);
-                }
-            } finally {
-                if (isActive) {
-                    setThreatLoading(false);
-                }
-            }
-        };
+        refreshAllStats();
+    }, [refreshAllStats]);
 
-        fetchThreatStats();
-        interval = setInterval(fetchThreatStats, 8000);
-        
-        return () => {
-            isActive = false;
-            if (interval) clearInterval(interval);
-        };
-    }, [token, showOnlyIcon]);
-
+    // ===== WEBSOCKET: Real-time update via prop from Dashboard =====
+    // When latestWsAlert changes, refresh the overview statistics
     useEffect(() => {
-        if (!token || showOnlyIcon) return;
-        
-        let isActive = true;
-        let interval = null;
-        
-        const fetchSuspiciousIPs = async () => {
-            if (!isActive) return;
-            setSuspiciousIPsLoading(true);
-            try {
-                const data = await getTopSuspiciousIPs(token);
-                if (isActive) {
-                    setSuspiciousIPs(data.results || []);
-                }
-            } catch (error) {
-                if (isActive) {
-                    console.error('Failed to fetch suspicious IPs:', error);
-                }
-            } finally {
-                if (isActive) {
-                    setSuspiciousIPsLoading(false);
-                }
-            }
-        };
+        if (!latestWsAlert) return;
+        refreshAllStats();
+    }, [latestWsAlert]); // eslint-disable-line react-hooks/exhaustive-deps
 
-        fetchSuspiciousIPs();
-        interval = setInterval(fetchSuspiciousIPs, 8000);
-        
-        return () => {
-            isActive = false;
-            if (interval) clearInterval(interval);
-        };
-    }, [token, showOnlyIcon]);
+    // Handle WebSocket CLEAR signal
+    useEffect(() => {
+        if (wsClearSignal > 0) {
+            console.log('[Overview] Refreshing stats due to WS clear signal');
+            refreshAllStats();
+        }
+    }, [wsClearSignal, refreshAllStats]);
 
     if (showOnlyIcon) {
         return (
@@ -186,10 +132,18 @@ const Overview = ({ user, token, showOnlyIcon = false }) => {
     return (
         <div className="space-y-6">
             <div className="bg-[#0d1117] border border-[#30363d] rounded-xl p-6">
-                <h2 className="text-white text-lg font-bold mb-4">Packet Classification</h2>
-                <p className="text-sm text-gray-400 mb-4">Traffic categorization based on Snort alert priority</p>
+                <div className="flex justify-between items-center mb-4">
+                    <div>
+                        <h2 className="text-white text-lg font-bold">Packet Classification</h2>
+                        <p className="text-sm text-gray-400">Traffic categorization based on Snort alert priority</p>
+                    </div>
+                    <span className="text-[10px] text-gray-500 uppercase tracking-widest font-bold">
+                        Last Live Sync: {lastRefreshAt.toLocaleTimeString()}
+                    </span>
+                </div>
+                
                 {threatLoading ? (
-                    <div className="text-gray-400 text-sm">Loading...</div>
+                    <div className="text-gray-400 text-sm">Syncing statistics...</div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {[
@@ -223,7 +177,7 @@ const Overview = ({ user, token, showOnlyIcon = false }) => {
                 <h2 className="text-white text-lg font-bold mb-4">Protocol Statistics</h2>
                 <p className="text-sm text-gray-400 mb-4">Distribution of network protocols in captured traffic</p>
                 {protocolLoading ? (
-                    <div className="text-gray-400 text-sm">Loading...</div>
+                    <div className="text-gray-400 text-sm">Syncing statistics...</div>
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         {protocolStats.length > 0 ? (
@@ -256,7 +210,7 @@ const Overview = ({ user, token, showOnlyIcon = false }) => {
                 <h2 className="text-white text-lg font-bold mb-4">Top Suspicious IPs</h2>
                 <p className="text-sm text-gray-400 mb-4">Most active source IPs generating alerts</p>
                 {suspiciousIPsLoading ? (
-                    <div className="text-gray-400 text-sm">Loading...</div>
+                    <div className="text-gray-400 text-sm">Syncing statistics...</div>
                 ) : (
                     <div className="overflow-x-auto">
                         <table className="w-full text-sm">

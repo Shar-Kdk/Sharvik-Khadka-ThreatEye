@@ -22,7 +22,7 @@ class Command(BaseCommand):
         interval = max(1, options['interval'])
         self.stdout.write(
             self.style.SUCCESS(
-                f'✓ Snort log polling started'
+                f'[OK] Snort log polling started'
             )
         )
         self.stdout.write(f'  Location: {settings.SNORT_LOG_DIR}')
@@ -66,11 +66,11 @@ class Command(BaseCommand):
         
         except KeyboardInterrupt:
             # Show final summary
-            self.stdout.write(self.style.WARNING('\n✓ Snort polling stopped\n'))
-            self.stdout.write(self.style.SUCCESS('═══════ Session Summary ═══════'))
-            self.stdout.write(f'✓ Alerts Found:        {total_alerts}')
-            self.stdout.write(f'✓ Alerts Ingested:     {total_ingested}')
-            self.stdout.write(f'✓ ML Analysis Done:    {total_ingested}')
-            self.stdout.write(f'✓ Emails Sent:         {total_ingested}')
-            self.stdout.write(f'✓ Failures:            {total_failed}')
-            self.stdout.write(self.style.SUCCESS('═════════════════════════════\n'))
+            self.stdout.write(self.style.WARNING('\n[STOP] Snort polling stopped\n'))
+            self.stdout.write(self.style.SUCCESS('======= Session Summary ======='))
+            self.stdout.write(f'  Alerts Found:        {total_alerts}')
+            self.stdout.write(f'  Alerts Ingested:     {total_ingested}')
+            self.stdout.write(f'  ML Analysis Done:    {total_ingested}')
+            self.stdout.write(f'  Emails Sent:         {total_ingested}')
+            self.stdout.write(f'  Failures:            {total_failed}')
+            self.stdout.write(self.style.SUCCESS('===============================\n'))

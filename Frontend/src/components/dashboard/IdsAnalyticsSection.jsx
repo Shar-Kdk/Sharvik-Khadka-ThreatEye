@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   getAlertsTimeline,
   getThreatLevelDistribution,
@@ -10,7 +10,7 @@ import TopAttacksBarChart from '../charts/TopAttacksBarChart';
 import AlertsTimelineChart from '../charts/AlertsTimelineChart';
 import ProtocolStatsChart from '../charts/ProtocolStatsChart';
 
-export default function IdsAnalyticsSection({ token }) {
+export default function IdsAnalyticsSection({ token, latestWsAlert, wsClearSignal }) {
   const [threatDistribution, setThreatDistribution] = useState([]);
   const [topAttacks, setTopAttacks] = useState([]);
   const [alertsTimeline, setAlertsTimeline] = useState([]);
@@ -18,53 +18,54 @@ export default function IdsAnalyticsSection({ token }) {
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    let active = true;
+  const fetchAnalytics = useCallback(async () => {
+    if (!token) return;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-    const fetchAnalytics = async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+    try {
+      const [distributionPayload, topAttacksPayload, timelinePayload, protocolPayload] = await Promise.all([
+        getThreatLevelDistribution(token, controller.signal),
+        getTopAttacks(token, controller.signal),
+        getAlertsTimeline(token, controller.signal),
+        getProtocolStatistics(token, controller.signal),
+      ]);
 
-      try {
-        const [distributionPayload, topAttacksPayload, timelinePayload, protocolPayload] = await Promise.all([
-          getThreatLevelDistribution(token, controller.signal),
-          getTopAttacks(token, controller.signal),
-          getAlertsTimeline(token, controller.signal),
-          getProtocolStatistics(token, controller.signal),
-        ]);
-
-        if (!active) {
-          return;
-        }
-
-        setThreatDistribution(distributionPayload.results || []);
-        setTopAttacks(topAttacksPayload.results || []);
-        setAlertsTimeline(timelinePayload.results || []);
-        setProtocolStats(protocolPayload.results || []);
-        setLastSyncedAt(new Date());
-        setError('');
-      } catch (err) {
-        if (!active) {
-          return;
-        }
-        if (err?.name === 'AbortError') {
-          setError('Analytics request timed out. Retrying...');
-        } else {
-          setError(err.message || 'Failed to fetch analytics');
-        }
-      } finally {
-        clearTimeout(timeoutId);
+      setThreatDistribution(distributionPayload.results || []);
+      setTopAttacks(topAttacksPayload.results || []);
+      setAlertsTimeline(timelinePayload.results || []);
+      setProtocolStats(protocolPayload.results || []);
+      setLastSyncedAt(new Date());
+      setError('');
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        setError('Analytics request timed out. Retrying...');
+      } else {
+        setError(err.message || 'Failed to fetch analytics');
       }
-    };
-
-    fetchAnalytics();
-    const intervalId = setInterval(fetchAnalytics, 5000);
-
-    return () => {
-      active = false;
-      clearInterval(intervalId);
-    };
+    } finally {
+      clearTimeout(timeoutId);
+    }
   }, [token]);
+
+  // Initial fetch
+  useEffect(() => {
+    fetchAnalytics();
+  }, [fetchAnalytics]);
+
+  // ===== WEBSOCKET: Real-time update via prop from Dashboard =====
+  useEffect(() => {
+    if (!latestWsAlert) return;
+    fetchAnalytics();
+  }, [latestWsAlert]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Handle WebSocket CLEAR signal
+  useEffect(() => {
+    if (wsClearSignal > 0) {
+      console.log('[IdsAnalytics] Refreshing due to WS clear signal');
+      fetchAnalytics();
+    }
+  }, [wsClearSignal, fetchAnalytics]);
 
   return (
     <div className="bg-[#0d1117] border border-[#30363d] rounded-xl p-6">
@@ -72,7 +73,7 @@ export default function IdsAnalyticsSection({ token }) {
         <div>
           <h2 className="text-white text-lg font-bold">IDS Analytics Dashboard</h2>
           <p className="text-sm text-gray-400 mt-1">
-            Real-time analytics refreshed every 5 seconds from alerts data.
+            Real-time analytics powered by WebSockets. Charts update instantly on threat detection.
           </p>
         </div>
         <p className="text-xs text-gray-500">

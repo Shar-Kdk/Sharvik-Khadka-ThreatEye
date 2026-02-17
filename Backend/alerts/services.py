@@ -279,6 +279,86 @@ ThreatEye Intrusion Detection System
         logger.error(f"Error in send_alert_notification for alert {alert.id}: {str(e)}")
 
 
+# ===== WEBSOCKET BROADCAST FOR REAL-TIME ALERTS =====
+# Push new alerts to all connected WebSocket clients via Django Channels.
+#
+# IMPORTANT: InMemoryChannelLayer is process-local. poll_snort_logs runs
+# in a SEPARATE process from Daphne (runserver), so direct channel_layer
+# calls from here would never reach the WebSocket clients. Instead, we
+# POST to an internal webhook on the Daphne server via HTTP.
+
+def broadcast_alert_via_websocket(alert):
+    """
+    Broadcast a new alert to all connected WebSocket clients.
+
+    Uses an HTTP POST to the running Daphne server's internal endpoint.
+    This ensures the broadcast happens inside Daphne's process where
+    the InMemoryChannelLayer can reach connected WebSocket consumers.
+
+    Args:
+        alert: Alert model instance that was just saved to the database
+    """
+    try:
+        import requests
+        from django.conf import settings as django_settings
+
+        # Serialize alert data for WebSocket transmission
+        alert_data = {
+            'id': alert.id,
+            'timestamp': alert.timestamp.isoformat() if alert.timestamp else None,
+            'src_ip': alert.src_ip,
+            'src_port': alert.src_port,
+            'dest_ip': alert.dest_ip,
+            'dest_port': alert.dest_port,
+            'protocol': alert.protocol,
+            'sid': alert.sid,
+            'message': alert.message,
+            'classification': alert.classification,
+            'priority': alert.priority,
+            'threat_level': alert.threat_level,
+            'ml_processed': alert.ml_processed,
+            'ml_threat_score': alert.ml_threat_score,
+            'ml_classification': alert.ml_classification,
+        }
+
+        # POST to the Daphne server's internal broadcast endpoint
+        response = requests.post(
+            'http://127.0.0.1:8000/api/alerts/ws-broadcast/',
+            json={'alert': alert_data},
+            headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]},
+            timeout=3,
+        )
+
+        if response.status_code == 200:
+            logger.debug(f'[WebSocket] Broadcast alert {alert.id} via HTTP webhook')
+        else:
+            logger.warning(f'[WebSocket] HTTP broadcast returned {response.status_code}: {response.text}')
+
+    except Exception as e:
+        # Never let WebSocket errors break the ingestion pipeline
+        logger.warning(f'[WebSocket] Failed to broadcast alert {alert.id}: {e}')
+
+def broadcast_clear_signal():
+    """
+    Tells all connected WebSocket clients to clear their UI alert lists.
+    Used when the database is manually cleared.
+    """
+    try:
+        import requests
+        from django.conf import settings as django_settings
+
+        requests.post(
+            'http://127.0.0.1:8000/api/alerts/ws-broadcast/',
+            json={'type': 'alert.clear'},
+            headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]},
+            timeout=3,
+        )
+        logger.info('[WebSocket] Broadcast clear signal via HTTP webhook')
+    except Exception as e:
+        logger.warning(f'[WebSocket] Failed to broadcast clear signal: {e}')
+
+
+
 # ===== ML MODEL INITIALIZATION =====
 # Lazy-load ML threat analyzer on first use
 _threat_analyzer = None
@@ -785,6 +865,8 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
                         enrich_alert_with_ml(alert)
                         # Send email notification for MEDIUM and HIGH alerts
                         send_alert_notification(alert)
+                        # Broadcast to all connected WebSocket clients
+                        broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         continue
                     except Exception:
@@ -881,6 +963,8 @@ def ingest_snort_logs(log_dir, max_lines=None):
                         enrich_alert_with_ml(alert)
                         # Send email notification for MEDIUM and HIGH alerts
                         send_alert_notification(alert)
+                        # Broadcast to all connected WebSocket clients
+                        broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         # Duplicate alert (same event_hash) - skip
                         continue

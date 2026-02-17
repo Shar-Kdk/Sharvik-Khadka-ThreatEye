@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import IdsAnalyticsSection from '../../components/dashboard/IdsAnalyticsSection';
 
-const AdminOverview = ({ token }) => {
+const AdminOverview = ({ token, latestWsAlert, wsClearSignal }) => {
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
@@ -41,7 +41,7 @@ const AdminOverview = ({ token }) => {
                 <p className="text-gray-400 text-sm mt-1">Live metrics fetched from the production database.</p>
             </div>
 
-            <IdsAnalyticsSection token={token} />
+            <IdsAnalyticsSection token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {cards.map((stat) => (

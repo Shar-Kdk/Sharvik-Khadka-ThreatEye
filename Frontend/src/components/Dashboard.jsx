@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Overview from '../pages/dashboard/Overview';
@@ -7,6 +7,7 @@ import OrganizationsList from '../pages/dashboard/OrganizationsList';
 import SubscriptionDetails from '../pages/dashboard/SubscriptionDetails';
 import SubscriptionHistory from '../pages/dashboard/SubscriptionHistory';
 import LiveTraffic from '../pages/dashboard/LiveTraffic';
+import useAlertWebSocket from '../hooks/useAlertWebSocket';
 import { getLiveAlerts, getSubscriptionStatus } from '../services/api';
 
 const BASE_URL = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/$/, '');
@@ -55,7 +56,53 @@ function Dashboard({ user, token, onLogout }) {
   const profileMenuRef = useRef(null);
   const seenAlertIdsRef = useRef(new Set());
   const hasInitializedNotificationsRef = useRef(false);
+  const showNotificationsMenuRef = useRef(false);
   const location = useLocation();
+
+  // Keep the ref in sync with the state (avoids stale closures in WS callback)
+  useEffect(() => {
+    showNotificationsMenuRef.current = showNotificationsMenu;
+  }, [showNotificationsMenu]);
+
+  // ===== SINGLE WEBSOCKET: Central alert hub =====
+  // Dashboard owns the only WebSocket. All child components receive alerts via props.
+  const [latestWsAlert, setLatestWsAlert] = useState(null);
+  const [wsClearSignal, setWsClearSignal] = useState(0);
+
+  const handleWsClear = useCallback(() => {
+    setLatestWsAlert(null);
+    setWsClearSignal(Date.now());
+    setNotificationAlerts([]);
+    setUnreadAlertCount(0);
+    seenAlertIdsRef.current.clear();
+  }, []);
+
+  const handleWsAlert = useCallback((alert) => {
+    // Broadcast to all child components via state (counter ensures re-render even for same alert)
+    setLatestWsAlert({ alert, _seq: Date.now() });
+
+    // Notification bell: only for medium/high alerts
+    if (!isSevereThreatAlert(alert)) return;
+    if (seenAlertIdsRef.current.has(alert.id)) return;
+
+    seenAlertIdsRef.current.add(alert.id);
+
+    setNotificationAlerts((prev) => {
+      const updated = [alert, ...prev].slice(0, MAX_NOTIFICATION_ITEMS);
+      return updated;
+    });
+
+    // Only increment unread count if the notification menu is closed
+    if (!showNotificationsMenuRef.current) {
+      setUnreadAlertCount((prev) => prev + 1);
+    }
+  }, []); // No deps — uses refs for everything that changes
+
+  const { isConnected: wsConnected, connectionStatus: wsConnectionStatus } = useAlertWebSocket(
+    token,
+    handleWsAlert,
+    handleWsClear
+  );
 
   // Check if user is a Platform Owner (system admin) vs Organization Admin
   const isPlatformOwner = user?.role === 'platform_owner';
@@ -178,6 +225,8 @@ function Dashboard({ user, token, onLogout }) {
     }
   }, [showNotificationsMenu]);
 
+  // When the notification menu opens, merge API data with existing WebSocket-pushed items
+  // (instead of overwriting). This prevents "flash" where WS alerts disappear temporarily.
   useEffect(() => {
     if (!token) {
       return;
@@ -192,7 +241,6 @@ function Dashboard({ user, token, onLogout }) {
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     const loadSevereAlerts = async () => {
-      setIsNotificationLoading(true);
       setNotificationError('');
 
       try {
@@ -210,7 +258,21 @@ function Dashboard({ user, token, onLogout }) {
           }
         });
 
-        setNotificationAlerts(severeAlerts);
+        // Merge: keep WS-pushed alerts + add API alerts, deduplicate by ID
+        setNotificationAlerts((prev) => {
+          const merged = [...prev, ...severeAlerts];
+          const deduped = [];
+          const seen = new Set();
+          for (const item of merged) {
+            if (item?.id == null || seen.has(item.id)) continue;
+            seen.add(item.id);
+            deduped.push(item);
+            if (deduped.length >= MAX_NOTIFICATION_ITEMS) break;
+          }
+          // Sort newest first
+          deduped.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+          return deduped;
+        });
       } catch (err) {
         if (!active) {
           return;
@@ -223,9 +285,6 @@ function Dashboard({ user, token, onLogout }) {
         }
       } finally {
         clearTimeout(timeoutId);
-        if (active) {
-          setIsNotificationLoading(false);
-        }
       }
     };
 
@@ -425,17 +484,17 @@ function Dashboard({ user, token, onLogout }) {
             {/* Platform Owner Routes */}
             {isPlatformOwner ? (
               <>
-                <Route path="/" element={<AdminOverview token={token} />} />
+                <Route path="/" element={<AdminOverview token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
                 <Route path="/organizations" element={<OrganizationsList token={token} />} />
-                <Route path="/live-traffic" element={<LiveTraffic token={token} />} />
+                <Route path="/live-traffic" element={<LiveTraffic token={token} latestWsAlert={latestWsAlert} wsConnectionStatus={wsConnectionStatus} wsClearSignal={wsClearSignal} />} />
               </>
             ) : (
               /* Regular User Routes */
               <>
-                <Route path="/" element={<Overview user={user} token={token} />} />
-                 <Route path="/subscription" element={<SubscriptionDetails subscription={subscription} />} />
-                 <Route path="/subscription/history" element={<SubscriptionHistory token={token} />} />
-                 <Route path="/live-traffic" element={<LiveTraffic token={token} />} />
+                <Route path="/" element={<Overview user={user} token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
+                <Route path="/subscription" element={<SubscriptionDetails subscription={subscription} />} />
+                <Route path="/subscription/history" element={<SubscriptionHistory token={token} />} />
+                <Route path="/live-traffic" element={<LiveTraffic token={token} latestWsAlert={latestWsAlert} wsConnectionStatus={wsConnectionStatus} wsClearSignal={wsClearSignal} />} />
               </>
             )}
           </Routes>

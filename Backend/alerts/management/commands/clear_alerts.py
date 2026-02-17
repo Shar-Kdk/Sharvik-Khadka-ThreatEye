@@ -30,8 +30,12 @@ class Command(BaseCommand):
             cursor.execute('TRUNCATE TABLE alerts_alert')
             cursor.execute('TRUNCATE TABLE alerts_logingestionstate')
 
+        # Tell the frontend to clear its memory too
+        from alerts.services import broadcast_clear_signal
+        broadcast_clear_signal()
+
         self.stdout.write(
             self.style.SUCCESS(
-                f'✓ Deleted {alert_count} alerts and {state_count} ingestion states'
+                f'[OK] Deleted {alert_count} alerts and {state_count} ingestion states'
             )
         )

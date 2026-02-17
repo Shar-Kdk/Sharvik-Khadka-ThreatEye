@@ -136,9 +136,43 @@ export const getPaymentHistory = async (token) => {
 
 // ===== ALERTS & ANALYTICS API =====
 
-// Get real-time security alerts from Snort IDS
-export const getLiveAlerts = async (token, limit = 100, signal) => {
-  const response = await fetch(`${BASE_URL}/api/alerts/live/?limit=${limit}`, {
+// Get real-time security alerts from Snort IDS with filtering support
+export const getLiveAlerts = async (token, limit = 100, signal, filters = {}) => {
+  // Build query parameters
+  const params = new URLSearchParams();
+  params.append('limit', limit);
+  
+  // Add filter parameters if provided
+  if (filters.threat_level) {
+    params.append('threat_level', filters.threat_level);
+  }
+  if (filters.protocol) {
+    params.append('protocol', filters.protocol);
+  }
+  if (filters.sid) {
+    params.append('sid', filters.sid);
+  }
+  if (filters.src_ip) {
+    params.append('src_ip', filters.src_ip);
+  }
+  if (filters.dest_ip) {
+    params.append('dest_ip', filters.dest_ip);
+  }
+  if (filters.date_from) {
+    params.append('date_from', filters.date_from);
+  }
+  if (filters.date_to) {
+    params.append('date_to', filters.date_to);
+  }
+  if (filters.search) {
+    params.append('search', filters.search);
+  }
+
+  const url = `${BASE_URL}/api/alerts/live/?${params.toString()}`;
+  console.log('[API] getLiveAlerts URL:', url);
+  console.log('[API] Filters:', filters);
+
+  const response = await fetch(url, {
     signal,
     headers: {
       'Authorization': `Bearer ${token}`,
@@ -147,6 +181,21 @@ export const getLiveAlerts = async (token, limit = 100, signal) => {
 
   if (!response.ok) {
     throw new Error('Failed to fetch live alerts');
+  }
+
+  return response.json();
+};
+
+// Get distinct SIDs, source IPs, and destination IPs for filter dropdowns
+export const getFilterOptions = async (token) => {
+  const response = await fetch(`${BASE_URL}/api/alerts/filter-options/`, {
+    headers: {
+      'Authorization': `Bearer ${token}`,
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch filter options');
   }
 
   return response.json();

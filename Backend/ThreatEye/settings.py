@@ -48,6 +48,7 @@ ALLOWED_HOSTS = []
 # Core Django: admin, auth, sessions, static files
 # Third-party: REST, CORS
 INSTALLED_APPS = [
+    'daphne',  # MUST be first — replaces runserver with ASGI (WebSocket support)
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -57,6 +58,7 @@ INSTALLED_APPS = [
 
     'rest_framework',
     'corsheaders',
+    'channels',  # Django Channels — WebSocket consumer infrastructure
     'authentication',
     'subscription',
     'alerts',
@@ -95,8 +97,8 @@ TEMPLATES = [
     },
 ]
 
-# WSGI application for production deployment
-WSGI_APPLICATION = 'ThreatEye.wsgi.application'
+# ASGI application for WebSocket + HTTP support (replaces WSGI)
+ASGI_APPLICATION = 'ThreatEye.asgi.application'
 
 
 # ===== DATABASE CONFIGURATION =====
@@ -198,6 +200,15 @@ CORS_ALLOWED_ORIGINS = [
 
 CORS_ALLOW_CREDENTIALS = True
 
+# ===== DJANGO CHANNELS (WEBSOCKET) CONFIGURATION =====
+# InMemoryChannelLayer for development (no Redis required)
+# For production, switch to channels_redis.core.RedisChannelLayer
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
+
 # ===== EMAIL CONFIGURATION (GMAIL SMTP) =====
 # For verification codes and alert notifications
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
@@ -247,7 +258,7 @@ LOGGING = {
         },
         'alerts': {
             'handlers': ['console'],
-            'level': 'ERROR',
+            'level': 'DEBUG',
             'propagate': True,
         },
         'authentication': {

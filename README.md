@@ -22,12 +22,14 @@ The project focuses on three core pillars:
 - **Multi-Tenancy**: Support for multiple organizations with distinct user capacity limits (Max Users) and isolated data access.
 - **Admin Dashboard**: Specialized views for Platform Owners to manage all organizations and subscriptions.
 - **Plan Management**: Organization Admins can view current plans, renewal dates, and full billing history.
-- **Live Network Traffic Monitoring**: Real-time Snort ingestion and visualization with 5-second refresh.
-- **Alert + Packet Ingestion**: Reads `snort.alert.fast*` and `snort.log*` from `real_logs` directory with resumable ingestion.
+- **Live Network Traffic Monitoring**: Real-time Snort ingestion and visualization via **WebSockets (Django Channels)**.
+- **In-App Notifications**: Real-time notification bell with unread badges and live alert previews.
+- **Alert + Packet Ingestion**: Cross-process ingestion system that pushes updates instantly from Snort logs to the browser.
 - **Threat Level Alerts (Priority-Based)**:
    - **Priority 1 -> High (Red)**
    - **Priority 2 -> Medium (Yellow)**
    - **Priority 3 -> Safe (Green)**
+- **Filter Logs**: Advanced multi-criteria filtering for SID, IP, Protocol, and Date ranges.
 - **Live Table Pagination**: Dashboard traffic table supports pagination with a maximum of 50 rows per page.
 - **ML-Based Threat Classification**: Random Forest model for real-time attack detection and threat scoring.
 - **Defensive Data Handling**: Graceful error handling for malformed alerts and invalid data to maintain pipeline integrity.
@@ -37,7 +39,8 @@ The project focuses on three core pillars:
 ## 🛠 Tech Stack
 
 ### Backend
-- **Framework:** Django 4.2.16
+- **Framework:** Django 4.2.16 (with Daphne & Django Channels for WebSockets)
+- **ASGI Server:** Daphne 4.2
 - **API:** Django REST Framework 3.15.2
 - **Authentication:** Simple JWT 5.4.0 (JWT)
 - **Payment Gateway:** Stripe SDK 8.1.0
