@@ -47,6 +47,13 @@ def live_alerts(request):
     except ValueError:
         limit = 100
 
+    # Optional pagination offset (0-based)
+    offset = request.query_params.get('offset', '0')
+    try:
+        offset = max(0, int(offset))
+    except ValueError:
+        offset = 0
+
     # Start with all alerts
     queryset = Alert.objects.all()
     
@@ -147,15 +154,19 @@ def live_alerts(request):
     # Get total count BEFORE applying limit (for pagination info)
     total_available = queryset.count()
     
-    # Order by newest first, apply limit, and evaluate to list ONCE
-    # (avoids multiple DB queries from .count() + iteration on sliced queryset)
-    alerts_list = list(queryset.order_by('-timestamp')[:limit])
+    # Order by newest first (stable ordering for pagination), apply offset+limit,
+    # and evaluate to list ONCE (avoids extra queries from iteration)
+    alerts_list = list(queryset.order_by('-timestamp', '-id')[offset:offset + limit])
     
-    logger.info(f"[live_alerts] Returning {len(alerts_list)} alerts (total_available={total_available})")
+    logger.info(
+        f"[live_alerts] Returning {len(alerts_list)} alerts (total_available={total_available}, offset={offset}, limit={limit})"
+    )
 
     return Response({
         'count': len(alerts_list),
         'total_available': total_available,
+        'offset': offset,
+        'limit': limit,
         'results': [
             {
                 'id': alert.id,

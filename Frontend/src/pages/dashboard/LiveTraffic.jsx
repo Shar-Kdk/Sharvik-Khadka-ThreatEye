@@ -74,6 +74,7 @@ function alertMatchesFilters(alert, filters) {
  */
 export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, wsClearSignal }) {
   const [alerts, setAlerts] = useState([]);
+  const [totalAvailable, setTotalAvailable] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState('');
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
@@ -154,6 +155,8 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
   // React to latestWsAlert prop changes (pushed from Dashboard.jsx)
   useEffect(() => {
     if (!latestWsAlert) return;
+    // Avoid shifting historical pages while the user is browsing.
+    if (currentPage !== 1) return;
     const alert = latestWsAlert.alert;
     if (!alert || !alert.id) return;
 
@@ -165,18 +168,20 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
 
     seenAlertIdsRef.current.add(alert.id);
     setAlerts((prev) => {
-      const updated = [alert, ...prev].slice(0, MAX_ITEMS_PER_PAGE);
+      const updated = [alert, ...prev].slice(0, itemsPerPage);
       return updated;
     });
+    setTotalAvailable((prev) => Math.max(0, prev) + 1);
     setLastSyncedAt(new Date());
     setError('');
-  }, [latestWsAlert]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [latestWsAlert, currentPage, itemsPerPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle WebSocket CLEAR signal
   useEffect(() => {
     if (wsClearSignal > 0) {
       console.log('[LiveTraffic] Clearing alerts due to WS signal');
       setAlerts([]);
+      setTotalAvailable(0);
       seenAlertIdsRef.current.clear();
       setLastSyncedAt(new Date());
     }
@@ -196,16 +201,19 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
 
     const fetchAlerts = async () => {
       try {
-        const livePayload = await getLiveAlerts(token, MAX_ITEMS_PER_PAGE, controller.signal, activeFilters);
+        const offset = Math.max(0, (currentPage - 1) * itemsPerPage);
+        const livePayload = await getLiveAlerts(token, itemsPerPage, controller.signal, activeFilters, offset);
 
         if (!active) return;
 
         const results = livePayload.results || [];
         setAlerts(results);
         seenAlertIdsRef.current = new Set(results.map((a) => a.id));
+        setTotalAvailable(
+          Number.isFinite(livePayload.total_available) ? livePayload.total_available : results.length
+        );
         setError('');
         setLastSyncedAt(new Date());
-        setCurrentPage(1);
       } catch (err) {
         if (!active) return;
         if (err?.name === 'AbortError') {
@@ -222,7 +230,7 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
     fetchAlerts();
     return () => { active = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token, activeFilters, forceRefresh]);
+  }, [token, activeFilters, forceRefresh, currentPage, itemsPerPage]);
 
   // Close filter modal when clicking outside
   useEffect(() => {
@@ -265,7 +273,7 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
     setForceRefresh(prev => prev + 1);
   };
 
-  const totalPages = Math.max(1, Math.ceil(alerts.length / itemsPerPage));
+  const totalPages = Math.max(1, Math.ceil(totalAvailable / itemsPerPage));
 
   useEffect(() => {
     if (currentPage > totalPages) {
@@ -273,11 +281,7 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
     }
   }, [currentPage, totalPages]);
 
-  const paginatedAlerts = useMemo(() => {
-    const start = (currentPage - 1) * itemsPerPage;
-    const end = start + itemsPerPage;
-    return alerts.slice(start, end);
-  }, [alerts, currentPage, itemsPerPage]);
+  const paginatedAlerts = useMemo(() => alerts, [alerts]);
 
   return (
     <div className="space-y-6">
@@ -288,7 +292,7 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
             <h2 className="text-white text-lg font-bold">Live Network Traffic</h2>
             <div className="flex gap-4 mt-2 items-center">
               <p className="text-sm text-gray-300">
-                <span className="font-semibold text-blue-400">{alerts.length}</span> alerts detected
+                <span className="font-semibold text-blue-400">{totalAvailable}</span> alerts detected
               </p>
               {hasActiveFilters && (
                 <p className="text-sm text-yellow-300">(Filtered)</p>
@@ -563,9 +567,9 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
             </table>
           </div>
         )}
-        {!isLoading && alerts.length > 0 && (
+        {!isLoading && totalAvailable > 0 && (
           <Pagination
-            totalItems={alerts.length}
+            totalItems={totalAvailable}
             itemsPerPage={itemsPerPage}
             currentPage={currentPage}
             onPageChange={setCurrentPage}

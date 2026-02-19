@@ -137,10 +137,15 @@ export const getPaymentHistory = async (token) => {
 // ===== ALERTS & ANALYTICS API =====
 
 // Get real-time security alerts from Snort IDS with filtering support
-export const getLiveAlerts = async (token, limit = 100, signal, filters = {}) => {
+export const getLiveAlerts = async (token, limit = 100, signal, filters = {}, offset = 0) => {
   // Build query parameters
   const params = new URLSearchParams();
   params.append('limit', limit);
+
+  const parsedOffset = Number(offset);
+  if (Number.isFinite(parsedOffset) && parsedOffset > 0) {
+    params.append('offset', String(Math.floor(parsedOffset)));
+  }
   
   // Add filter parameters if provided
   if (filters.threat_level) {

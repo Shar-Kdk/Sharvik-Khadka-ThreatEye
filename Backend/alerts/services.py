@@ -757,7 +757,14 @@ def _get_pcap_endian_and_data_offset(header_bytes):
     return None, None
 
 
-def ingest_snort_packet_logs(log_dir, max_packets=None):
+def ingest_snort_packet_logs(
+    log_dir,
+    max_packets=None,
+    *,
+    enable_ml=True,
+    enable_email=True,
+    enable_websocket=True,
+):
     # Parse PCAP files, extract IPv4 packets, validate and store as alerts
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
@@ -860,19 +867,20 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
                             raw_line=f"pcap:{file_path}:{ts_sec}.{ts_usec}:{parsed_packet['src_ip']}->{parsed_packet['dest_ip']}",
                             event_hash=event_hash,
                         )
-                        inserted += 1
-                        # Enrich alert with ML analysis
-                        enrich_alert_with_ml(alert)
-                        # Send email notification for MEDIUM and HIGH alerts
-                        send_alert_notification(alert)
-                        # Broadcast to all connected WebSocket clients
-                        broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         continue
                     except Exception:
                         failed_packets += 1
                         logger.exception('Failed to store parsed packet from %s', file_path)
                         continue
+
+                    inserted += 1
+                    if enable_ml:
+                        enrich_alert_with_ml(alert)
+                    if enable_email:
+                        send_alert_notification(alert)
+                    if enable_websocket:
+                        broadcast_alert_via_websocket(alert)
 
                 state.offset = handle.tell()
 
@@ -888,7 +896,14 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
     }
 
 
-def ingest_snort_logs(log_dir, max_lines=None):
+def ingest_snort_logs(
+    log_dir,
+    max_lines=None,
+    *,
+    enable_ml=True,
+    enable_email=True,
+    enable_websocket=True,
+):
     # Parse FAST format alert logs, validate, deduplicate via event_hash, store alerts
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
@@ -904,6 +919,10 @@ def ingest_snort_logs(log_dir, max_lines=None):
     inserted = 0
     processed_lines = 0
     failed_lines = 0
+
+    # Save ingestion progress periodically during large backfills so an
+    # interrupted run can resume without re-processing huge portions.
+    checkpoint_every = 1000
 
     for log_file in log_files:
         if max_lines is not None and processed_lines >= max_lines:
@@ -926,6 +945,12 @@ def ingest_snort_logs(log_dir, max_lines=None):
 
             with log_file.open('r', encoding='utf-8', errors='ignore') as handle:
                 handle.seek(state.offset)
+
+                # Only advance ingestion state for lines we have safely processed.
+                # If DB writes start failing, do NOT mark the rest of the file as ingested.
+                last_safe_offset = state.offset
+                lines_since_checkpoint = 0
+
                 while True:
                     if max_lines is not None and processed_lines >= max_lines:
                         break
@@ -935,10 +960,24 @@ def ingest_snort_logs(log_dir, max_lines=None):
                     if not line:
                         break
 
+                    line_end = handle.tell()
                     processed_lines += 1
+                    lines_since_checkpoint += 1
+
                     # Parse FAST format line
                     parsed = parse_snort_fast_line(line)
                     if not parsed:
+                        last_safe_offset = line_end
+                        if lines_since_checkpoint >= checkpoint_every:
+                            state.offset = last_safe_offset
+                            try:
+                                LogIngestionState.objects.filter(file_path=file_path).update(
+                                    inode=state.inode,
+                                    offset=state.offset,
+                                )
+                            except Exception:
+                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
+                            lines_since_checkpoint = 0
                         continue
 
                     # Validate parsed fields
@@ -946,6 +985,17 @@ def ingest_snort_logs(log_dir, max_lines=None):
                     if not is_valid:
                         failed_lines += 1
                         logger.warning(f'Invalid alert data from {file_path}: {error_msg}')
+                        last_safe_offset = line_end
+                        if lines_since_checkpoint >= checkpoint_every:
+                            state.offset = last_safe_offset
+                            try:
+                                LogIngestionState.objects.filter(file_path=file_path).update(
+                                    inode=state.inode,
+                                    offset=state.offset,
+                                )
+                            except Exception:
+                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
+                            lines_since_checkpoint = 0
                         continue
 
                     # Create unique hash for deduplication (same line = same event)
@@ -958,22 +1008,48 @@ def ingest_snort_logs(log_dir, max_lines=None):
                             raw_line=line.strip(),
                             event_hash=event_hash,
                         )
-                        inserted += 1
-                        # Enrich alert with ML analysis
-                        enrich_alert_with_ml(alert)
-                        # Send email notification for MEDIUM and HIGH alerts
-                        send_alert_notification(alert)
-                        # Broadcast to all connected WebSocket clients
-                        broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         # Duplicate alert (same event_hash) - skip
+                        last_safe_offset = line_end
+                        if lines_since_checkpoint >= checkpoint_every:
+                            state.offset = last_safe_offset
+                            try:
+                                LogIngestionState.objects.filter(file_path=file_path).update(
+                                    inode=state.inode,
+                                    offset=state.offset,
+                                )
+                            except Exception:
+                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
+                            lines_since_checkpoint = 0
                         continue
                     except Exception:
                         failed_lines += 1
                         logger.exception(f'Failed to store validated alert from {file_path}')
-                        continue
+                        # Stop here so we can retry later, rather than skipping data.
+                        break
 
-                state.offset = handle.tell()
+                    inserted += 1
+                    if enable_ml:
+                        enrich_alert_with_ml(alert)
+                    if enable_email:
+                        send_alert_notification(alert)
+                    if enable_websocket:
+                        broadcast_alert_via_websocket(alert)
+
+                    last_safe_offset = line_end
+
+                    if lines_since_checkpoint >= checkpoint_every:
+                        state.offset = last_safe_offset
+                        try:
+                            LogIngestionState.objects.filter(file_path=file_path).update(
+                                inode=state.inode,
+                                offset=state.offset,
+                            )
+                        except Exception:
+                            logger.warning('Failed to checkpoint ingestion state for %s', file_path)
+                        lines_since_checkpoint = 0
+
+                state.offset = last_safe_offset
 
             # Save progress (file offset + inode) for resume on restart
             # Use update_or_create to prevent errors if record was deleted

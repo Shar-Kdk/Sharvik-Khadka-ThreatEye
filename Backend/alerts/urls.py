@@ -5,7 +5,7 @@ from .views import live_alerts, filter_options, threat_level_distribution, top_a
 # ===== ALERTS API ENDPOINTS =====
 # Real-time security alerts from Snort IDS and analytics endpoints
 urlpatterns = [
-    # GET: limit param (1-500) → latest security alerts for real-time feed
+    # GET: limit (1-10000) + offset (0-based) → latest security alerts for real-time feed
     path('live/', live_alerts, name='live_alerts'),
     # GET: → distinct SIDs, src_ips, dest_ips for filter dropdowns
     path('filter-options/', filter_options, name='filter_options'),
