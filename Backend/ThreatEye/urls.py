@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path, include
-from alerts.views import threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics, top_suspicious_ips
+from alerts.analytics import threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics, top_suspicious_ips, dashboard_summary
 
 # ===== MAIN URL ROUTING CONFIGURATION =====
 # Maps all incoming requests to the appropriate app endpoints
@@ -18,6 +18,7 @@ urlpatterns = [
     path('api/alerts-timeline/', alerts_timeline, name='api_alerts_timeline'),
     path('api/protocol-statistics/', protocol_statistics, name='api_protocol_statistics'),
     path('api/top-suspicious-ips/', top_suspicious_ips, name='api_top_suspicious_ips'),
+    path('api/dashboard-summary/', dashboard_summary, name='api_dashboard_summary'),
     # Subscription API: subscription plans, user subscriptions, payments
     path('subscriptions/', include('subscription.urls')),
 ]

@@ -4,11 +4,13 @@ const Sidebar = ({ isPlatformOwner }) => {
     const location = useLocation();
 
     const menuItems = isPlatformOwner ? [
-        { name: 'Platform Overview', path: '/dashboard' },
+        { name: 'Dashboard', path: '/dashboard' },
+        { name: 'Analytics', path: '/dashboard/analytics' },
         { name: 'Organizations', path: '/dashboard/organizations' },
         { name: 'Live Traffic', path: '/dashboard/live-traffic' }
     ] : [
-        { name: 'Overview', path: '/dashboard' },
+        { name: 'Dashboard', path: '/dashboard' },
+        { name: 'Analytics', path: '/dashboard/analytics' },
         { name: 'Subscription', path: '/dashboard/subscription' },
         { name: 'Live Traffic', path: '/dashboard/live-traffic' }
     ];

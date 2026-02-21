@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
+import DashboardHome from '../pages/dashboard/DashboardHome';
 import Overview from '../pages/dashboard/Overview';
 import AdminOverview from '../pages/dashboard/AdminOverview';
 import OrganizationsList from '../pages/dashboard/OrganizationsList';
@@ -110,7 +111,8 @@ function Dashboard({ user, token, onLogout }) {
   const getPageTitle = () => {
     // Map routes to page titles
     const pathToTitle = {
-      '/dashboard': isPlatformOwner ? 'Platform Overview' : 'General Overview',
+      '/dashboard': 'Dashboard',
+      '/dashboard/analytics': isPlatformOwner ? 'Platform Analytics' : 'Analytics',
       '/dashboard/organizations': 'Organizations',
       '/dashboard/subscription': 'Plan Management',
       '/dashboard/subscription/history': 'Subscription History',
@@ -484,14 +486,16 @@ function Dashboard({ user, token, onLogout }) {
             {/* Platform Owner Routes */}
             {isPlatformOwner ? (
               <>
-                <Route path="/" element={<AdminOverview token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
+                <Route path="/" element={<DashboardHome token={token} />} />
+                <Route path="/analytics" element={<AdminOverview token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
                 <Route path="/organizations" element={<OrganizationsList token={token} />} />
                 <Route path="/live-traffic" element={<LiveTraffic token={token} latestWsAlert={latestWsAlert} wsConnectionStatus={wsConnectionStatus} wsClearSignal={wsClearSignal} />} />
               </>
             ) : (
               /* Regular User Routes */
               <>
-                <Route path="/" element={<Overview user={user} token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
+                <Route path="/" element={<DashboardHome token={token} />} />
+                <Route path="/analytics" element={<Overview user={user} token={token} latestWsAlert={latestWsAlert} wsClearSignal={wsClearSignal} />} />
                 <Route path="/subscription" element={<SubscriptionDetails subscription={subscription} />} />
                 <Route path="/subscription/history" element={<SubscriptionHistory token={token} />} />
                 <Route path="/live-traffic" element={<LiveTraffic token={token} latestWsAlert={latestWsAlert} wsConnectionStatus={wsConnectionStatus} wsClearSignal={wsClearSignal} />} />

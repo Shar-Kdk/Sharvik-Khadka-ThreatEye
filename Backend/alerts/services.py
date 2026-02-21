@@ -338,25 +338,6 @@ def broadcast_alert_via_websocket(alert):
         # Never let WebSocket errors break the ingestion pipeline
         logger.warning(f'[WebSocket] Failed to broadcast alert {alert.id}: {e}')
 
-def broadcast_clear_signal():
-    """
-    Tells all connected WebSocket clients to clear their UI alert lists.
-    Used when the database is manually cleared.
-    """
-    try:
-        import requests
-        from django.conf import settings as django_settings
-
-        requests.post(
-            'http://127.0.0.1:8000/api/alerts/ws-broadcast/',
-            json={'type': 'alert.clear'},
-            headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]},
-            timeout=3,
-        )
-        logger.info('[WebSocket] Broadcast clear signal via HTTP webhook')
-    except Exception as e:
-        logger.warning(f'[WebSocket] Failed to broadcast clear signal: {e}')
-
 
 
 # ===== ML MODEL INITIALIZATION =====
@@ -757,14 +738,7 @@ def _get_pcap_endian_and_data_offset(header_bytes):
     return None, None
 
 
-def ingest_snort_packet_logs(
-    log_dir,
-    max_packets=None,
-    *,
-    enable_ml=True,
-    enable_email=True,
-    enable_websocket=True,
-):
+def ingest_snort_packet_logs(log_dir, max_packets=None):
     # Parse PCAP files, extract IPv4 packets, validate and store as alerts
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
@@ -867,20 +841,19 @@ def ingest_snort_packet_logs(
                             raw_line=f"pcap:{file_path}:{ts_sec}.{ts_usec}:{parsed_packet['src_ip']}->{parsed_packet['dest_ip']}",
                             event_hash=event_hash,
                         )
+                        inserted += 1
+                        # Enrich alert with ML analysis
+                        enrich_alert_with_ml(alert)
+                        # Send email notification for MEDIUM and HIGH alerts
+                        send_alert_notification(alert)
+                        # Broadcast to all connected WebSocket clients
+                        broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         continue
                     except Exception:
                         failed_packets += 1
                         logger.exception('Failed to store parsed packet from %s', file_path)
                         continue
-
-                    inserted += 1
-                    if enable_ml:
-                        enrich_alert_with_ml(alert)
-                    if enable_email:
-                        send_alert_notification(alert)
-                    if enable_websocket:
-                        broadcast_alert_via_websocket(alert)
 
                 state.offset = handle.tell()
 
@@ -896,15 +869,201 @@ def ingest_snort_packet_logs(
     }
 
 
-def ingest_snort_logs(
-    log_dir,
-    max_lines=None,
-    *,
-    enable_ml=True,
-    enable_email=True,
-    enable_websocket=True,
-):
-    # Parse FAST format alert logs, validate, deduplicate via event_hash, store alerts
+
+# ===== BATCH PROCESSING HELPERS =====
+
+BATCH_SIZE = 500  # Number of alerts to process per batch
+
+
+def _process_alert_batch(alert_objects):
+    """
+    Process a batch of Alert objects efficiently:
+      0. DROP alerts from permanently blocked IPs (they can't attack anymore)
+      1. Bulk insert into DB (skip duplicates)
+      2. Batch ML enrichment
+      3. WebSocket batch_complete signal
+      4. Batch prevention (medium/high only)
+      5. Single email digest per batch
+    """
+    if not alert_objects:
+        return 0
+
+    # ---- STEP 0: Drop alerts from permanently blocked IPs ----
+    from .models import BlockedIP
+    blocked_ips = set(
+        BlockedIP.objects.filter(
+            block_type=BlockedIP.BLOCK_PERMANENT,
+            is_active=True,
+        ).values_list('ip_address', flat=True)
+    )
+
+    if blocked_ips:
+        before = len(alert_objects)
+        alert_objects = [a for a in alert_objects if a.src_ip not in blocked_ips]
+        dropped = before - len(alert_objects)
+        if dropped > 0:
+            logger.info(f'[Prevention] Dropped {dropped} alerts from {len(blocked_ips)} permanently blocked IP(s)')
+
+    if not alert_objects:
+        return 0
+
+    # ---- STEP 1: Bulk insert, skip duplicates ----
+    Alert.objects.bulk_create(
+        alert_objects,
+        ignore_conflicts=True,
+        batch_size=500,
+    )
+
+    # Re-fetch inserted alerts (MySQL ignore_conflicts doesn't set IDs)
+    hashes = [a.event_hash for a in alert_objects]
+    saved_alerts = list(
+        Alert.objects.filter(event_hash__in=hashes, ml_processed=False)
+        .only('id', 'src_ip', 'dest_ip', 'src_port', 'dest_port',
+              'protocol', 'sid', 'message', 'threat_level', 'priority',
+              'event_hash', 'ml_processed')
+    )
+
+    if not saved_alerts:
+        return 0
+
+    count = len(saved_alerts)
+
+    # ---- STEP 2: Batch ML enrichment ----
+    try:
+        analyzer = get_threat_analyzer()
+        if analyzer:
+            ml_updates = []
+            for alert in saved_alerts:
+                try:
+                    result = analyzer.analyze_alert(alert)
+                    if result['error'] is None:
+                        alert.ml_processed = True
+                        alert.ml_threat_score = result['confidence']
+                        alert.ml_classification = 'attack' if result['threat_class'] == 1 else 'benign'
+                        alert.ml_features = result.get('features_extracted', 0)
+                        ml_updates.append(alert)
+                except Exception:
+                    pass
+
+            if ml_updates:
+                Alert.objects.bulk_update(
+                    ml_updates,
+                    ['ml_processed', 'ml_threat_score', 'ml_classification', 'ml_features'],
+                    batch_size=500,
+                )
+    except Exception as e:
+        logger.warning(f'[Batch ML] Error: {e}')
+
+    # ---- STEP 3: Broadcast batch_complete signal to frontend ----
+    # Tells the frontend to re-fetch from the API (not individual alerts)
+    try:
+        import requests
+        from django.conf import settings as django_settings
+        webhook_url = 'http://127.0.0.1:8000/api/alerts/ws-broadcast/'
+        latest = saved_alerts[-1]
+
+        response = requests.post(webhook_url, json={
+            'type': 'alert.batch',
+            'count': count,
+            'latest': {
+                'id': latest.id,
+                'src_ip': latest.src_ip,
+                'dest_ip': latest.dest_ip,
+                'message': latest.message[:200],
+                'threat_level': latest.threat_level,
+            },
+        }, headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]}, timeout=3)
+
+        if response.status_code == 200:
+            logger.debug(f'[WebSocket] Broadcast batch {count} via HTTP webhook')
+        else:
+            logger.warning(f'[WebSocket] HTTP batch broadcast returned {response.status_code}: {response.text}')
+    except Exception as e:
+        logger.warning(f'[Batch WS] Broadcast failed: {e}')
+
+    # ---- STEP 4: Prevention (medium/high only) ----
+    try:
+        from .prevention import apply_prevention_action
+        severe = [a for a in saved_alerts if a.threat_level in (Alert.THREAT_MEDIUM, Alert.THREAT_HIGH)]
+        for alert in severe:
+            apply_prevention_action(alert)
+    except Exception as e:
+        logger.warning(f'[Batch Prevention] Error: {e}')
+
+    # ---- STEP 5: Single email digest ----
+    try:
+        high_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_HIGH]
+        medium_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_MEDIUM]
+        if high_alerts or medium_alerts:
+            _send_batch_email_notification(high_alerts, medium_alerts)
+    except Exception as e:
+        logger.warning(f'[Batch Email] Error: {e}')
+
+    return count
+
+
+def _send_batch_email_notification(high_alerts, medium_alerts):
+    """Send a single digest email for a batch of alerts instead of one per alert."""
+    total_high = len(high_alerts)
+    total_medium = len(medium_alerts)
+
+    subject = f'[ThreatEye] Alert Digest: {total_high} High, {total_medium} Medium alerts'
+
+    # Build a concise summary
+    lines = [f'ThreatEye detected {total_high + total_medium} notable alerts:\n']
+    if high_alerts:
+        lines.append(f'🔴 HIGH SEVERITY ({total_high}):')
+        for a in high_alerts[:10]:  # Cap at 10 examples
+            lines.append(f'  • {a.src_ip} → {a.dest_ip} | {a.message[:80]}')
+        if total_high > 10:
+            lines.append(f'  ... and {total_high - 10} more\n')
+    if medium_alerts:
+        lines.append(f'🟡 MEDIUM SEVERITY ({total_medium}):')
+        for a in medium_alerts[:10]:
+            lines.append(f'  • {a.src_ip} → {a.dest_ip} | {a.message[:80]}')
+        if total_medium > 10:
+            lines.append(f'  ... and {total_medium - 10} more\n')
+
+    body = '\n'.join(lines)
+
+    try:
+        from authentication.models import Organization, User
+        from subscription.models import SubscriptionPlan
+
+        organizations = Organization.objects.filter(is_active=True)
+        recipient_emails = []
+        for org in organizations:
+            if org.subscription_tier == Organization.TIER_NOT_SUBSCRIBED:
+                continue
+            # Check if any plan allows email alerts (simple check)
+            plans_with_email = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
+            if not plans_with_email.exists():
+                continue
+            admins = User.objects.filter(organization=org, role=User.ROLE_ORG_ADMIN)
+            recipient_emails.extend([u.email for u in admins if u.email])
+
+        if recipient_emails:
+            from django.core.mail import send_mail
+            from django.conf import settings as django_settings
+            send_mail(
+                subject,
+                body,
+                django_settings.DEFAULT_FROM_EMAIL,
+                recipient_emails,
+                fail_silently=True,
+            )
+            logger.info(f'[Batch Email] Sent digest to {len(recipient_emails)} recipients')
+    except Exception as e:
+        logger.warning(f'[Batch Email] Failed: {e}')
+
+
+# ===== OPTIMIZED BATCH INGESTION =====
+
+def ingest_snort_logs(log_dir, max_lines=None):
+    """
+    Parse FAST format alert logs, validate, deduplicate via event_hash,
+    and store alerts using efficient batch processing.
+    """
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
         logger.warning(f'Log directory does not exist: {log_dir}')
@@ -915,14 +1074,11 @@ def ingest_snort_logs(
         [p for p in log_dir_path.rglob('*alert*') if p.is_file() and p.suffix != '.gz' and not p.name.startswith('.')],
         key=lambda p: p.name,
     )
-    
+
     inserted = 0
     processed_lines = 0
     failed_lines = 0
-
-    # Save ingestion progress periodically during large backfills so an
-    # interrupted run can resume without re-processing huge portions.
-    checkpoint_every = 1000
+    batch = []  # Accumulate Alert objects for batch processing
 
     for log_file in log_files:
         if max_lines is not None and processed_lines >= max_lines:
@@ -945,12 +1101,6 @@ def ingest_snort_logs(
 
             with log_file.open('r', encoding='utf-8', errors='ignore') as handle:
                 handle.seek(state.offset)
-
-                # Only advance ingestion state for lines we have safely processed.
-                # If DB writes start failing, do NOT mark the rest of the file as ingested.
-                last_safe_offset = state.offset
-                lines_since_checkpoint = 0
-
                 while True:
                     if max_lines is not None and processed_lines >= max_lines:
                         break
@@ -960,24 +1110,10 @@ def ingest_snort_logs(
                     if not line:
                         break
 
-                    line_end = handle.tell()
                     processed_lines += 1
-                    lines_since_checkpoint += 1
-
                     # Parse FAST format line
                     parsed = parse_snort_fast_line(line)
                     if not parsed:
-                        last_safe_offset = line_end
-                        if lines_since_checkpoint >= checkpoint_every:
-                            state.offset = last_safe_offset
-                            try:
-                                LogIngestionState.objects.filter(file_path=file_path).update(
-                                    inode=state.inode,
-                                    offset=state.offset,
-                                )
-                            except Exception:
-                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
-                            lines_since_checkpoint = 0
                         continue
 
                     # Validate parsed fields
@@ -985,74 +1121,27 @@ def ingest_snort_logs(
                     if not is_valid:
                         failed_lines += 1
                         logger.warning(f'Invalid alert data from {file_path}: {error_msg}')
-                        last_safe_offset = line_end
-                        if lines_since_checkpoint >= checkpoint_every:
-                            state.offset = last_safe_offset
-                            try:
-                                LogIngestionState.objects.filter(file_path=file_path).update(
-                                    inode=state.inode,
-                                    offset=state.offset,
-                                )
-                            except Exception:
-                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
-                            lines_since_checkpoint = 0
                         continue
 
                     # Create unique hash for deduplication (same line = same event)
                     hash_source = f'{file_path}:{line_start}:{line.strip()}'
                     event_hash = hashlib.sha256(hash_source.encode('utf-8')).hexdigest()
 
-                    try:
-                        alert = Alert.objects.create(
-                            **cleaned_data,
-                            raw_line=line.strip(),
-                            event_hash=event_hash,
-                        )
-                    except IntegrityError:
-                        # Duplicate alert (same event_hash) - skip
-                        last_safe_offset = line_end
-                        if lines_since_checkpoint >= checkpoint_every:
-                            state.offset = last_safe_offset
-                            try:
-                                LogIngestionState.objects.filter(file_path=file_path).update(
-                                    inode=state.inode,
-                                    offset=state.offset,
-                                )
-                            except Exception:
-                                logger.warning('Failed to checkpoint ingestion state for %s', file_path)
-                            lines_since_checkpoint = 0
-                        continue
-                    except Exception:
-                        failed_lines += 1
-                        logger.exception(f'Failed to store validated alert from {file_path}')
-                        # Stop here so we can retry later, rather than skipping data.
-                        break
+                    # Append to batch instead of inserting one-by-one
+                    batch.append(Alert(
+                        **cleaned_data,
+                        raw_line=line.strip(),
+                        event_hash=event_hash,
+                    ))
 
-                    inserted += 1
-                    if enable_ml:
-                        enrich_alert_with_ml(alert)
-                    if enable_email:
-                        send_alert_notification(alert)
-                    if enable_websocket:
-                        broadcast_alert_via_websocket(alert)
+                    # Process batch when it reaches BATCH_SIZE
+                    if len(batch) >= BATCH_SIZE:
+                        inserted += _process_alert_batch(batch)
+                        batch = []
 
-                    last_safe_offset = line_end
-
-                    if lines_since_checkpoint >= checkpoint_every:
-                        state.offset = last_safe_offset
-                        try:
-                            LogIngestionState.objects.filter(file_path=file_path).update(
-                                inode=state.inode,
-                                offset=state.offset,
-                            )
-                        except Exception:
-                            logger.warning('Failed to checkpoint ingestion state for %s', file_path)
-                        lines_since_checkpoint = 0
-
-                state.offset = last_safe_offset
+                state.offset = handle.tell()
 
             # Save progress (file offset + inode) for resume on restart
-            # Use update_or_create to prevent errors if record was deleted
             LogIngestionState.objects.update_or_create(
                 file_path=file_path,
                 defaults={'inode': state.inode, 'offset': state.offset}
@@ -1060,6 +1149,10 @@ def ingest_snort_logs(
         except Exception:
             logger.exception('Error while ingesting alert log file %s', log_file)
             continue
+
+    # Process any remaining alerts in the final partial batch
+    if batch:
+        inserted += _process_alert_batch(batch)
 
     return {
         'inserted': inserted,
@@ -1074,16 +1167,16 @@ def ingest_snort_logs(
 def run_polling_loop(log_dir, interval_seconds=3):
     """
     Continuously monitor Snort log directory and ingest new alerts.
-    
+
     Polling cycle:
     1. Call ingest_snort_logs() - parse text-based FAST format alerts
     2. Call ingest_snort_packet_logs() - parse binary PCAP packets
     3. Sleep for interval_seconds
     4. Repeat forever
-    
+
     Designed to run as background process or management command.
     Logs results of each ingestion cycle.
-    
+
     Args:
         log_dir: Path to Snort log directory
         interval_seconds: Delay between polling cycles (default 3 seconds)
@@ -1095,8 +1188,24 @@ def run_polling_loop(log_dir, interval_seconds=3):
             # Ingest binary PCAP packet logs
             packet_result = ingest_snort_packet_logs(log_dir)
 
-            # Ingest cycle complete (log handled by management command)
-        except Exception:
-            logger.exception('Unhandled error in snort polling loop')
+            total_inserted = text_result.get('inserted', 0) + packet_result.get('inserted', 0)
+            total_processed = text_result.get('processed_lines', 0) + packet_result.get('processed_packets', 0)
+            total_failed = text_result.get('failed_lines', 0) + packet_result.get('failed_packets', 0)
 
-        time.sleep(max(1, interval_seconds))
+            if total_inserted > 0 or total_failed > 0:
+                logger.info(
+                    f'[{datetime.now().strftime("%H:%M:%S")}] '
+                    f'Detected: {total_processed} | Inserted: {total_inserted} | Failed: {total_failed}'
+                )
+
+            # Cleanup expired temporary blocks
+            try:
+                from .prevention import cleanup_expired_blocks
+                cleanup_expired_blocks()
+            except Exception:
+                pass
+
+        except Exception:
+            logger.exception('Error in polling loop iteration')
+
+        time.sleep(interval_seconds)
