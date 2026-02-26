@@ -181,3 +181,23 @@ credentials.json
 gmail_password.txt
 smtp_credentials.txt
 
+# ====================================
+# Development & Reference Files
+# ====================================
+# Unused files backup folder (for reference)
+/unused_files/
+# Documentation folder (keep clean)
+/documents/
+# Development scripts and one-time utilities
+*_analyze.py
+*_ingest.py
+*_check.py
+*_clear.py
+*_retrain.py
+*_test.py
+# Batch files
+*.bat
+# Temporary analysis files
+analysis_*.py
+temp_*.py
+

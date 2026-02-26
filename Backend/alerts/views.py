@@ -188,20 +188,30 @@ def live_alerts(request):
 def filter_options(request):
     """
     Get distinct values for filter dropdowns (SID, Attacker IP, Target IP).
-    Returns sorted, deduplicated lists populated from existing alert data.
+    Returns sorted, deduplicated lists populated from recent alert data.
+    
+    OPTIMIZATION: Limited to alerts from last 7 days + limited results
+    to avoid full table scans on 558k+ row tables
     
     Response format:
     {
         "sids": [{"value": "1000015", "label": "1000015 — Possible Malware C2 Communication"}, ...],
-        "src_ips": ["8.8.8.8", "192.168.1.50", ...],
-        "dest_ips": ["10.0.0.5", ...]
+        "src_ips": ["8.8.8.8", "192.168.1.50", ...],  (top 100 by frequency)
+        "dest_ips": ["10.0.0.5", ...]  (top 100 by frequency)
     }
     """
+    from django.utils import timezone as dj_timezone
+    from datetime import timedelta
+    
+    # Limit to last 7 days for performance
+    cutoff = dj_timezone.now() - timedelta(days=7)
+    recent_alerts = Alert.objects.filter(timestamp__gte=cutoff)
+    
     # Distinct SIDs with their most common message for labelling
     sid_rows = (
-        Alert.objects.values('sid', 'message')
+        recent_alerts.values('sid', 'message')
         .annotate(msg_count=Count('id'))
-        .order_by('sid', '-msg_count')
+        .order_by('sid', '-msg_count')[:100]  # Limit to top 100 SIDs
     )
     # Pick the most frequent message per SID
     sid_labels = {}
@@ -215,15 +225,23 @@ def filter_options(request):
         for sid, msg in sorted(sid_labels.items())
     ]
     
-    # Distinct source IPs (sorted ascending)
-    src_ips = sorted(
-        Alert.objects.values_list('src_ip', flat=True).distinct()
+    # Top 100 source IPs by frequency (sorted by frequency, then alphabetically)
+    src_ips_data = (
+        recent_alerts
+        .values('src_ip')
+        .annotate(count=Count('id'))
+        .order_by('-count', 'src_ip')[:100]
     )
+    src_ips = [row['src_ip'] for row in src_ips_data]
     
-    # Distinct destination IPs (sorted ascending)
-    dest_ips = sorted(
-        Alert.objects.values_list('dest_ip', flat=True).distinct()
+    # Top 100 destination IPs by frequency
+    dest_ips_data = (
+        recent_alerts
+        .values('dest_ip')
+        .annotate(count=Count('id'))
+        .order_by('-count', 'dest_ip')[:100]
     )
+    dest_ips = [row['dest_ip'] for row in dest_ips_data]
     
     return Response({
         'sids': sids,

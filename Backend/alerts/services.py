@@ -738,11 +738,11 @@ def _get_pcap_endian_and_data_offset(header_bytes):
     return None, None
 
 
-def ingest_snort_packet_logs(log_dir, max_packets=None):
+def ingest_snort_packet_logs(log_dir, max_packets=None, enable_ml=True, enable_email=True, enable_websocket=True):
     # Parse PCAP files, extract IPv4 packets, validate and store as alerts
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
-        return {'inserted': 0, 'processed_packets': 0}
+        return {'inserted': 0, 'processed_packets': 0, 'failed_packets': 0}
 
     # Recursively find all packet log files (snort.log*)
     log_files = sorted(
@@ -842,12 +842,15 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
                             event_hash=event_hash,
                         )
                         inserted += 1
-                        # Enrich alert with ML analysis
-                        enrich_alert_with_ml(alert)
-                        # Send email notification for MEDIUM and HIGH alerts
-                        send_alert_notification(alert)
-                        # Broadcast to all connected WebSocket clients
-                        broadcast_alert_via_websocket(alert)
+                        # Enrich alert with ML analysis (if enabled)
+                        if enable_ml:
+                            enrich_alert_with_ml(alert)
+                        # Send email notification for MEDIUM and HIGH alerts (if enabled)
+                        if enable_email:
+                            send_alert_notification(alert)
+                        # Broadcast to all connected WebSocket clients (if enabled)
+                        if enable_websocket:
+                            broadcast_alert_via_websocket(alert)
                     except IntegrityError:
                         continue
                     except Exception:
@@ -875,7 +878,7 @@ def ingest_snort_packet_logs(log_dir, max_packets=None):
 BATCH_SIZE = 500  # Number of alerts to process per batch
 
 
-def _process_alert_batch(alert_objects):
+def _process_alert_batch(alert_objects, enable_ml=True, enable_email=True, enable_websocket=True):
     """
     Process a batch of Alert objects efficiently:
       0. DROP alerts from permanently blocked IPs (they can't attack anymore)
@@ -884,28 +887,35 @@ def _process_alert_batch(alert_objects):
       3. WebSocket batch_complete signal
       4. Batch prevention (medium/high only)
       5. Single email digest per batch
+    
+    Args:
+        alert_objects: List of Alert objects to process
+        enable_ml: Run ML enrichment on alerts (default True)
+        enable_email: Send email notifications (default True)
+        enable_websocket: Broadcast WebSocket updates (default True)
     """
     if not alert_objects:
         return 0
 
     # ---- STEP 0: Drop alerts from permanently blocked IPs ----
-    from .models import BlockedIP
-    blocked_ips = set(
-        BlockedIP.objects.filter(
-            block_type=BlockedIP.BLOCK_PERMANENT,
-            is_active=True,
-        ).values_list('ip_address', flat=True)
-    )
-
-    if blocked_ips:
-        before = len(alert_objects)
-        alert_objects = [a for a in alert_objects if a.src_ip not in blocked_ips]
-        dropped = before - len(alert_objects)
-        if dropped > 0:
-            logger.info(f'[Prevention] Dropped {dropped} alerts from {len(blocked_ips)} permanently blocked IP(s)')
-
-    if not alert_objects:
-        return 0
+    # (BlockedIP model not yet implemented - skip this step for now)
+    # from .models import BlockedIP
+    # blocked_ips = set(
+    #     BlockedIP.objects.filter(
+    #         block_type=BlockedIP.BLOCK_PERMANENT,
+    #         is_active=True,
+    #     ).values_list('ip_address', flat=True)
+    # )
+    # 
+    # if blocked_ips:
+    #     before = len(alert_objects)
+    #     alert_objects = [a for a in alert_objects if a.src_ip not in blocked_ips]
+    #     dropped = before - len(alert_objects)
+    #     if dropped > 0:
+    #         logger.info(f'[Prevention] Dropped {dropped} alerts from {len(blocked_ips)} permanently blocked IP(s)')
+    # 
+    # if not alert_objects:
+    #     return 0
 
     # ---- STEP 1: Bulk insert, skip duplicates ----
     Alert.objects.bulk_create(
@@ -929,75 +939,79 @@ def _process_alert_batch(alert_objects):
     count = len(saved_alerts)
 
     # ---- STEP 2: Batch ML enrichment ----
-    try:
-        analyzer = get_threat_analyzer()
-        if analyzer:
-            ml_updates = []
-            for alert in saved_alerts:
-                try:
-                    result = analyzer.analyze_alert(alert)
-                    if result['error'] is None:
-                        alert.ml_processed = True
-                        alert.ml_threat_score = result['confidence']
-                        alert.ml_classification = 'attack' if result['threat_class'] == 1 else 'benign'
-                        alert.ml_features = result.get('features_extracted', 0)
-                        ml_updates.append(alert)
-                except Exception:
-                    pass
+    if enable_ml:
+        try:
+            analyzer = get_threat_analyzer()
+            if analyzer:
+                ml_updates = []
+                for alert in saved_alerts:
+                    try:
+                        result = analyzer.analyze_alert(alert)
+                        if result['error'] is None:
+                            alert.ml_processed = True
+                            alert.ml_threat_score = result['confidence']
+                            alert.ml_classification = 'attack' if result['threat_class'] == 1 else 'benign'
+                            alert.ml_features = result.get('features_extracted', 0)
+                            ml_updates.append(alert)
+                    except Exception:
+                        pass
 
-            if ml_updates:
-                Alert.objects.bulk_update(
-                    ml_updates,
-                    ['ml_processed', 'ml_threat_score', 'ml_classification', 'ml_features'],
-                    batch_size=500,
-                )
-    except Exception as e:
-        logger.warning(f'[Batch ML] Error: {e}')
+                if ml_updates:
+                    Alert.objects.bulk_update(
+                        ml_updates,
+                        ['ml_processed', 'ml_threat_score', 'ml_classification', 'ml_features'],
+                        batch_size=500,
+                    )
+        except Exception as e:
+            logger.warning(f'[Batch ML] Error: {e}')
 
     # ---- STEP 3: Broadcast batch_complete signal to frontend ----
     # Tells the frontend to re-fetch from the API (not individual alerts)
-    try:
-        import requests
-        from django.conf import settings as django_settings
-        webhook_url = 'http://127.0.0.1:8000/api/alerts/ws-broadcast/'
-        latest = saved_alerts[-1]
+    if enable_websocket:
+        try:
+            import requests
+            from django.conf import settings as django_settings
+            webhook_url = 'http://127.0.0.1:8000/api/alerts/ws-broadcast/'
+            latest = saved_alerts[-1]
 
-        response = requests.post(webhook_url, json={
-            'type': 'alert.batch',
-            'count': count,
-            'latest': {
-                'id': latest.id,
-                'src_ip': latest.src_ip,
-                'dest_ip': latest.dest_ip,
-                'message': latest.message[:200],
-                'threat_level': latest.threat_level,
-            },
-        }, headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]}, timeout=3)
+            response = requests.post(webhook_url, json={
+                'type': 'alert.batch',
+                'count': count,
+                'latest': {
+                    'id': latest.id,
+                    'src_ip': latest.src_ip,
+                    'dest_ip': latest.dest_ip,
+                    'message': latest.message[:200],
+                    'threat_level': latest.threat_level,
+                },
+            }, headers={'X-Internal-Key': django_settings.SECRET_KEY[:16]}, timeout=3)
 
-        if response.status_code == 200:
-            logger.debug(f'[WebSocket] Broadcast batch {count} via HTTP webhook')
-        else:
-            logger.warning(f'[WebSocket] HTTP batch broadcast returned {response.status_code}: {response.text}')
-    except Exception as e:
-        logger.warning(f'[Batch WS] Broadcast failed: {e}')
+            if response.status_code == 200:
+                logger.debug(f'[WebSocket] Broadcast batch {count} via HTTP webhook')
+            else:
+                logger.warning(f'[WebSocket] HTTP batch broadcast returned {response.status_code}: {response.text}')
+        except Exception as e:
+            logger.warning(f'[Batch WS] Broadcast failed: {e}')
 
     # ---- STEP 4: Prevention (medium/high only) ----
-    try:
-        from .prevention import apply_prevention_action
-        severe = [a for a in saved_alerts if a.threat_level in (Alert.THREAT_MEDIUM, Alert.THREAT_HIGH)]
-        for alert in severe:
-            apply_prevention_action(alert)
-    except Exception as e:
-        logger.warning(f'[Batch Prevention] Error: {e}')
+    # (prevention module not yet implemented - skip this step for now)
+    # try:
+    #     from .prevention import apply_prevention_action
+    #     severe = [a for a in saved_alerts if a.threat_level in (Alert.THREAT_MEDIUM, Alert.THREAT_HIGH)]
+    #     for alert in severe:
+    #         apply_prevention_action(alert)
+    # except Exception as e:
+    #     logger.warning(f'[Batch Prevention] Error: {e}')
 
     # ---- STEP 5: Single email digest ----
-    try:
-        high_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_HIGH]
-        medium_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_MEDIUM]
-        if high_alerts or medium_alerts:
-            _send_batch_email_notification(high_alerts, medium_alerts)
-    except Exception as e:
-        logger.warning(f'[Batch Email] Error: {e}')
+    if enable_email:
+        try:
+            high_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_HIGH]
+            medium_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_MEDIUM]
+            if high_alerts or medium_alerts:
+                _send_batch_email_notification(high_alerts, medium_alerts)
+        except Exception as e:
+            logger.warning(f'[Batch Email] Error: {e}')
 
     return count
 
@@ -1059,10 +1073,17 @@ def _send_batch_email_notification(high_alerts, medium_alerts):
 
 # ===== OPTIMIZED BATCH INGESTION =====
 
-def ingest_snort_logs(log_dir, max_lines=None):
+def ingest_snort_logs(log_dir, max_lines=None, enable_ml=True, enable_email=True, enable_websocket=True):
     """
     Parse FAST format alert logs, validate, deduplicate via event_hash,
     and store alerts using efficient batch processing.
+    
+    Args:
+        log_dir: Path to Snort log directory
+        max_lines: Max lines to process (None = all)
+        enable_ml: Run ML enrichment on alerts (default True)
+        enable_email: Send email notifications (default True)
+        enable_websocket: Broadcast WebSocket updates (default True)
     """
     log_dir_path = Path(log_dir)
     if not log_dir_path.exists() or not log_dir_path.is_dir():
@@ -1136,7 +1157,7 @@ def ingest_snort_logs(log_dir, max_lines=None):
 
                     # Process batch when it reaches BATCH_SIZE
                     if len(batch) >= BATCH_SIZE:
-                        inserted += _process_alert_batch(batch)
+                        inserted += _process_alert_batch(batch, enable_ml=enable_ml, enable_email=enable_email, enable_websocket=enable_websocket)
                         batch = []
 
                 state.offset = handle.tell()
@@ -1152,7 +1173,7 @@ def ingest_snort_logs(log_dir, max_lines=None):
 
     # Process any remaining alerts in the final partial batch
     if batch:
-        inserted += _process_alert_batch(batch)
+        inserted += _process_alert_batch(batch, enable_ml=enable_ml, enable_email=enable_email, enable_websocket=enable_websocket)
 
     return {
         'inserted': inserted,

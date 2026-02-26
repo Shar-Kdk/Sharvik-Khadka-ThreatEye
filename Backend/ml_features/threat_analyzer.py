@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class ThreatAnalyzer:
     """End-to-end threat analysis using Random Forest model with 12 simplified features."""
     
-    def __init__(self, model_name='random_forest_simplified', models_dir='trained_models'):
+    def __init__(self, model_name='random_forest_local', models_dir='trained_models'):
         """
         Initialize threat analyzer with simplified feature extractor.
         

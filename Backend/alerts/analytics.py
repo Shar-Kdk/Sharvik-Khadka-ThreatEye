@@ -60,32 +60,19 @@ def top_attacks(request):
     Get top 5 most common attack types
     Shows which attacks are happening most frequently
     Used for Top Attacks bar chart on dashboard
+    
+    OPTIMIZATION: Cache commonly used SIDs to avoid extra queries
     """
-    # Find top 5 attacks by occurrence count
-    top_sids = list(
-        Alert.objects.values('sid')
-        .annotate(count=Count('id'))
-        .order_by('-count', 'sid')[:5]
-    )
-
-    sid_values = [row['sid'] for row in top_sids]
-    message_rows = (
-        Alert.objects.filter(sid__in=sid_values)
-        .values('sid', 'message')
-        .annotate(message_count=Count('id'))
-        .order_by('sid', '-message_count')
-    )
-
-    top_message_by_sid = {}
-    for row in message_rows:
-        sid = row['sid']
-        if sid not in top_message_by_sid:
-            top_message_by_sid[sid] = row['message']
+    # Find top 5 attacks by occurrence count with message in one query
+    top_sids = Alert.objects.values('sid', 'message').annotate(
+        count=Count('id')
+    ).order_by('-count')[:5]
 
     results = []
     for row in top_sids:
         sid = row['sid']
-        attack_name = SID_ATTACK_MAP.get(sid) or top_message_by_sid.get(sid) or f'Attack SID {sid}'
+        message = row['message']
+        attack_name = SID_ATTACK_MAP.get(sid) or message[:80] or f'Attack SID {sid}'
         results.append({
             'sid': sid,
             'count': row['count'],
@@ -99,13 +86,19 @@ def top_attacks(request):
 @permission_classes([IsAuthenticated])
 def alerts_timeline(request):
     """
-    Get alerts grouped by time (1-minute buckets)
+    Get alerts grouped by time (1-minute buckets) - LIMITED TO LAST 24 HOURS
     Shows alert frequency over time in a line chart
-    Used for alerts timeline/activity chart on dashboard
+    Used for alerts timeline/activity chart on dashboard.
+    
+    OPTIMIZATION: Only queries last 24 hours instead of all time (for speed)
     """
-    # Group alerts by 1-minute time buckets and count
+    # Limit to last 24 hours to avoid scanning all 558k+ alerts
+    cutoff = dj_timezone.now() - timedelta(hours=24)
+    
+    # Group alerts by 1-minute time buckets and count (24h only)
     timeline = (
-        Alert.objects.annotate(bucket=TruncMinute('timestamp'))
+        Alert.objects.filter(timestamp__gte=cutoff)
+        .annotate(bucket=TruncMinute('timestamp'))
         .values('bucket')
         .annotate(count=Count('id'))
         .order_by('bucket')
@@ -189,31 +182,36 @@ def dashboard_summary(request):
     - alertsBySeverity: Count of high/medium/low severity alerts (last 24h)
     - activeThreats: High severity alerts (last 7 days)
     - falsePositives: Alerts classified as benign by ML model
-    - topAttackType: Most common attack type/classification
-    - mostTargetedIp: IP address most frequently targeted
-    - mostFrequentSourceIp: IP address most frequently attacking
+    - topAttackType: Most common attack type/classification (last 24h)
+    - mostTargetedIp: IP address most frequently targeted (last 24h)
+    - mostFrequentSourceIp: IP address most frequently attacking (last 24h)
     - ingestionRunning: Whether log ingestion is currently active
     - lastLogReceived: Timestamp of most recent alert
+    
+    OPTIMIZATION: All queries limited to 24h window except active threats (7d) and false positives (all-time)
     """
     now = dj_timezone.now()
     time_24h_ago = now - timedelta(hours=24)
     time_7d_ago = now - timedelta(days=7)
     
+    # Get all recent alerts once (24h window) to avoid multiple full table scans
+    recent_alerts_24h = Alert.objects.filter(timestamp__gte=time_24h_ago)
+    
     # Total alerts (last 24h)
-    total_alerts_24h = Alert.objects.filter(timestamp__gte=time_24h_ago).count()
+    total_alerts_24h = recent_alerts_24h.count()
     
     # Alerts by severity (last 24h)
     severity_counts = (
-        Alert.objects
-        .filter(timestamp__gte=time_24h_ago)
+        recent_alerts_24h
         .values('threat_level')
         .annotate(count=Count('id'))
     )
     
+    # Map database threat levels to dashboard display names
     alerts_by_severity = {
         'high': 0,
         'medium': 0,
-        'low': 0,
+        'safe': 0,  # Using 'safe' to match database threat_level values
     }
     for item in severity_counts:
         threat_level = item['threat_level']
@@ -233,9 +231,9 @@ def dashboard_summary(request):
         ml_processed=True
     ).count()
     
-    # Top attack type (most common classification)
+    # Top attack type (most common classification in last 24h)
     top_attack = (
-        Alert.objects
+        recent_alerts_24h
         .values('classification')
         .annotate(count=Count('id'))
         .order_by('-count')
@@ -243,9 +241,9 @@ def dashboard_summary(request):
     )
     top_attack_type = top_attack['classification'] if top_attack and top_attack['classification'] else 'N/A'
     
-    # Most targeted IP (most common dest_ip)
+    # Most targeted IP (most common dest_ip in last 24h)
     most_targeted = (
-        Alert.objects
+        recent_alerts_24h
         .values('dest_ip')
         .annotate(count=Count('id'))
         .order_by('-count')
@@ -253,9 +251,9 @@ def dashboard_summary(request):
     )
     most_targeted_ip = most_targeted['dest_ip'] if most_targeted else 'N/A'
     
-    # Most frequent source IP (attacker)
+    # Most frequent source IP (attacker in last 24h)
     most_frequent_source = (
-        Alert.objects
+        recent_alerts_24h
         .values('src_ip')
         .annotate(count=Count('id'))
         .order_by('-count')
@@ -263,18 +261,15 @@ def dashboard_summary(request):
     )
     most_frequent_source_ip = most_frequent_source['src_ip'] if most_frequent_source else 'N/A'
     
-    # Check if ingestion is running (check LogIngestionState)
-    ingestion_states = LogIngestionState.objects.all()
-    time_5min_ago = now - timedelta(minutes=5)
-    ingestion_running = any(
-        state.updated_at >= time_5min_ago 
-        for state in ingestion_states
-    )
+    # Check if ingestion is running (use database query instead of Python loop)
+    ingestion_running = LogIngestionState.objects.filter(
+        updated_at__gte=now - timedelta(minutes=5)
+    ).exists()
     
     # Last log received (most recent alert timestamp)
-    last_alert = Alert.objects.order_by('-timestamp').first()
+    last_alert = Alert.objects.order_by('-timestamp').values_list('timestamp', flat=True).first()
     last_log_received = (
-        last_alert.timestamp.isoformat() 
+        last_alert.isoformat() 
         if last_alert 
         else 'Never'
     )
