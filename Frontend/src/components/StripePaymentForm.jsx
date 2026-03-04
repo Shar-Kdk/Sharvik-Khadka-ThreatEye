@@ -42,62 +42,61 @@ const StripePaymentForm = ({ clientSecret, onPaymentSuccess, amount }) => {
         style: {
             base: {
                 fontSize: '16px',
-                color: '#ffffff',
+                color: '#111827',
                 '::placeholder': {
-                    color: '#6b7280',
+                    color: '#9ca3af',
                 },
                 backgroundColor: 'transparent',
             },
             invalid: {
-                color: '#ef4444',
+                color: '#dc2626',
             },
         },
     };
 
     return (
-        <div className="space-y-8">
-            <form onSubmit={handleSubmit} className="space-y-8">
-                <div className="space-y-6">
-                    {/* Card Holder */}
-                    <div>
-                        <label className="block text-xs font-bold text-blue-500 mb-2">Card Holder</label>
-                        <input
-                            type="text"
-                            value={cardHolder}
-                            onChange={(e) => setCardHolder(e.target.value)}
-                            placeholder="John Doe"
-                            className="w-full bg-transparent border-b border-[#30363d] py-3 text-white placeholder-gray-600 focus:outline-none focus:border-blue-500 transition-colors"
-                            required
-                        />
-                    </div>
+        <div className="space-y-6">
+            <form onSubmit={handleSubmit} className="space-y-6">
+                {/* Card Holder */}
+                <div>
+                    <label className="block text-gray-300 mb-2">Card Holder</label>
+                    <input
+                        type="text"
+                        autoComplete="off"
+                        value={cardHolder}
+                        onChange={(e) => setCardHolder(e.target.value)}
+                        placeholder="John Doe"
+                        className="w-full px-4 py-2 bg-white text-gray-900 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        required
+                    />
+                </div>
 
-                    {/* Card Number */}
+                {/* Card Number */}
+                <div>
+                    <label className="block text-gray-300 mb-2">Credit Card Number</label>
+                    <div className="px-4 py-2 bg-white border border-gray-300 rounded focus-within:ring-2 focus-within:ring-blue-500">
+                        <CardNumberElement options={elementOptions} />
+                    </div>
+                </div>
+
+                {/* Expiry and CVC */}
+                <div className="grid grid-cols-2 gap-4">
                     <div>
-                        <label className="block text-xs font-bold text-blue-500 mb-2">Credit Card Number</label>
-                        <div className="border-b border-[#30363d] py-3 focus-within:border-blue-500 transition-colors">
-                            <CardNumberElement options={elementOptions} />
+                        <label className="block text-gray-300 mb-2">Expiration Date</label>
+                        <div className="px-4 py-2 bg-white border border-gray-300 rounded focus-within:ring-2 focus-within:ring-blue-500">
+                            <CardExpiryElement options={elementOptions} />
                         </div>
                     </div>
-
-                    {/* Expiry and CVC */}
-                    <div className="grid grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-xs font-bold text-blue-500 mb-2">Expiration Date</label>
-                            <div className="border-b border-[#30363d] py-3 focus-within:border-blue-500 transition-colors">
-                                <CardExpiryElement options={elementOptions} />
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-blue-500 mb-2">CVV</label>
-                            <div className="border-b border-[#30363d] py-3 focus-within:border-blue-500 transition-colors">
-                                <CardCvcElement options={elementOptions} />
-                            </div>
+                    <div>
+                        <label className="block text-gray-300 mb-2">CVV</label>
+                        <div className="px-4 py-2 bg-white border border-gray-300 rounded focus-within:ring-2 focus-within:ring-blue-500">
+                            <CardCvcElement options={elementOptions} />
                         </div>
                     </div>
                 </div>
 
                 {error && (
-                    <div className="text-red-500 text-xs text-center font-medium animate-pulse">
+                    <div className="bg-red-500 text-white p-3 rounded text-center">
                         {error}
                     </div>
                 )}
@@ -105,7 +104,7 @@ const StripePaymentForm = ({ clientSecret, onPaymentSuccess, amount }) => {
                 <button
                     type="submit"
                     disabled={!stripe || processing}
-                    className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white font-black py-4 rounded-xl transition-all shadow-lg hover:shadow-blue-500/20 uppercase tracking-widest text-sm"
+                    className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:text-gray-400 text-white font-bold py-2 px-4 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
                 >
                     {processing ? "Securing Transaction..." : `Pay $${amount}`}
                 </button>

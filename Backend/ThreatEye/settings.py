@@ -160,7 +160,7 @@ USE_TZ = True
 
 # ===== STATIC FILES (CSS, JAVASCRIPT, IMAGES) =====
 # Static file serving URL
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
 
 # Default primary key field type - use 64-bit integers for large datasets
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

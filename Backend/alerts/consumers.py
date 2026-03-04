@@ -117,6 +117,13 @@ class AlertConsumer(AsyncJsonWebsocketConsumer):
             'data': event.get('data', {}),
         })
     
+    async def alert_batch(self, event):
+        """Called when a batch of alerts is broadcasted."""
+        await self.send_json({
+            'type': 'batch_alert',
+            'data': event.get('data', {}),
+        })
+    
     # ----- Private helpers -----
     
     @database_sync_to_async

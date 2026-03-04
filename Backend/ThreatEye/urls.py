@@ -1,5 +1,7 @@
 from django.contrib import admin
 from django.urls import path, include
+from django.conf import settings
+from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from alerts.analytics import threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics, top_suspicious_ips, dashboard_summary
 
 # ===== MAIN URL ROUTING CONFIGURATION =====
@@ -22,3 +24,6 @@ urlpatterns = [
     # Subscription API: subscription plans, user subscriptions, payments
     path('subscriptions/', include('subscription.urls')),
 ]
+
+if settings.DEBUG:
+    urlpatterns += staticfiles_urlpatterns()

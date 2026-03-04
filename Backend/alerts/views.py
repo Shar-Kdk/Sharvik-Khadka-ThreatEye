@@ -3,12 +3,16 @@ Core alert operations: live alerts listing, filtering, and WebSocket broadcastin
 Analytics endpoints are in analytics.py for better separation of concerns.
 """
 import logging
+import csv
+import io
+from io import BytesIO
 
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from django.db.models import Count, Q
 from django.utils import timezone as dj_timezone
+from django.http import HttpResponse, StreamingHttpResponse
 from datetime import datetime, timedelta
 
 from .models import Alert
@@ -318,6 +322,11 @@ def ws_broadcast_alert(request):
         payload = request.data.get('alert')
         if not payload:
             return Response({'error': 'missing alert data'}, status=400)
+    elif event_type == 'alert.batch':
+        payload = {
+            'count': request.data.get('count'),
+            'latest': request.data.get('latest'),
+        }
     elif event_type == 'alert.clear':
         payload = {} # No extra data needed for clear
     else:
@@ -343,3 +352,243 @@ def ws_broadcast_alert(request):
         return Response({'error': str(e)}, status=500)
 
     return Response({'status': 'ok'})
+
+
+def get_filtered_alerts(request, max_limit=None):
+    """
+    Helper function to get filtered alerts based on query parameters.
+    Used by both live_alerts and export endpoints.
+    """
+    # Parse and validate limit. If no limit is provided, export all rows unless
+    # a hard cap is requested by the caller (PDF export).
+    limit_param = request.query_params.get('limit')
+    limit = None
+    if limit_param not in (None, ''):
+        try:
+            limit = max(1, int(limit_param))
+        except ValueError:
+            limit = None
+
+    if max_limit is not None:
+        limit = max_limit if limit is None else min(limit, max_limit)
+
+    # Apply filters to queryset
+    alerts_qs = Alert.objects.all().order_by('-timestamp')
+
+    # Threat level filter
+    threat_levels = request.query_params.get('threat_level', '')
+    if threat_levels:
+        levels = [l.strip().lower() for l in threat_levels.split(',') if l.strip()]
+        if levels:
+            alerts_qs = alerts_qs.filter(threat_level__in=levels)
+
+    # Signature ID filter
+    sid = request.query_params.get('sid', '').strip()
+    if sid:
+        alerts_qs = alerts_qs.filter(sid=sid)
+
+    # Source IP filter
+    src_ip = request.query_params.get('src_ip', '').strip()
+    if src_ip:
+        alerts_qs = alerts_qs.filter(src_ip=src_ip)
+
+    # Destination IP filter
+    dest_ip = request.query_params.get('dest_ip', '').strip()
+    if dest_ip:
+        alerts_qs = alerts_qs.filter(dest_ip=dest_ip)
+
+    # Protocol filter
+    protocols = request.query_params.get('protocol', '')
+    if protocols:
+        proto_list = [p.strip().upper() for p in protocols.split(',') if p.strip()]
+        if proto_list:
+            alerts_qs = alerts_qs.filter(protocol__in=proto_list)
+
+    # Date range filter
+    date_from = request.query_params.get('date_from', '').strip()
+    if date_from:
+        try:
+            from_dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
+            if from_dt.tzinfo is None:
+                from_dt = dj_timezone.make_aware(from_dt, dj_timezone.get_current_timezone())
+            alerts_qs = alerts_qs.filter(timestamp__gte=from_dt)
+        except ValueError:
+            pass
+
+    date_to = request.query_params.get('date_to', '').strip()
+    if date_to:
+        try:
+            to_dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
+            if len(date_to) == 10:
+                to_dt = to_dt.replace(hour=23, minute=59, second=59)
+            if to_dt.tzinfo is None:
+                to_dt = dj_timezone.make_aware(to_dt, dj_timezone.get_current_timezone())
+            alerts_qs = alerts_qs.filter(timestamp__lte=to_dt)
+        except ValueError:
+            pass
+
+    # Search filter (in message, classification, sid)
+    search = request.query_params.get('search', '').strip()
+    if search:
+        search_lower = search.lower()
+        alerts_qs = alerts_qs.filter(
+            Q(message__icontains=search) |
+            Q(classification__icontains=search) |
+            Q(sid__icontains=search)
+        )
+
+    return alerts_qs if limit is None else alerts_qs[:limit]
+
+
+def _build_pdf_export_filename(request):
+    """Build a stable PDF filename from the requested date range."""
+    def normalize_date_label(value):
+        value = (value or '').strip()
+        if not value:
+            return 'all-dates'
+
+        # Preserve only the date portion when a datetime-local value is provided.
+        if 'T' in value:
+            value = value.split('T', 1)[0]
+
+        return value.replace('/', '-').replace(':', '-').replace(' ', '_')
+
+    start_label = normalize_date_label(request.query_params.get('date_from'))
+    end_label = normalize_date_label(request.query_params.get('date_to'))
+    return f'alert log {start_label} - {end_label}.pdf'
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def export_alerts_csv(request):
+    """
+    Export filtered alerts as CSV (no limit).
+    
+    Query Parameters: Same as live_alerts endpoint
+    - threat_level, sid, src_ip, dest_ip, protocol, date_from, date_to, search
+    - limit: (optional, no hard limit enforced)
+    
+    Returns: CSV file download
+    """
+    try:
+        class Echo:
+            def write(self, value):
+                return value
+
+        pseudo_buffer = Echo()
+        writer = csv.writer(pseudo_buffer)
+
+        def row_stream():
+            yield writer.writerow([
+                'Timestamp', 'Source IP', 'Source Port', 'Destination IP', 'Destination Port',
+                'Protocol', 'SID', 'Classification', 'Message', 'Threat Level',
+                'ML Classification', 'ML Confidence'
+            ])
+
+            alerts = get_filtered_alerts(request, max_limit=None)
+            for alert in alerts.iterator(chunk_size=2000):
+                yield writer.writerow([
+                    alert.timestamp.isoformat() if alert.timestamp else '',
+                    alert.src_ip or '',
+                    alert.src_port or '',
+                    alert.dest_ip or '',
+                    alert.dest_port or '',
+                    alert.protocol or '',
+                    alert.sid or '',
+                    alert.classification or '',
+                    alert.message or '',
+                    alert.threat_level or '',
+                    alert.ml_classification or '',
+                    f"{alert.ml_confidence:.2%}" if alert.ml_confidence else '',
+                ])
+
+        response = StreamingHttpResponse(row_stream(), content_type='text/csv; charset=utf-8')
+        response['Content-Disposition'] = f'attachment; filename="alerts_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv"'
+        return response
+        
+    except Exception as e:
+        logger.error(f'CSV export failed: {str(e)}')
+        return Response({'error': str(e)}, status=500)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def export_alerts_pdf(request):
+    """
+    Export filtered alerts as PDF (10k rows limit).
+    
+    Query Parameters: Same as live_alerts endpoint
+    - threat_level, sid, src_ip, dest_ip, protocol, date_from, date_to, search
+    - limit: (optional, capped at 10000)
+    
+    Returns: PDF file download
+    """
+    try:
+        from reportlab.lib.pagesizes import landscape, letter
+        from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+        from reportlab.lib import colors
+        from reportlab.lib.units import inch
+        
+        # Get filtered alerts (max 10k for PDF)
+        alerts = get_filtered_alerts(request, max_limit=10000)
+        
+        # Prepare data for table
+        data = [['Time', 'Src IP', 'Dst IP', 'Proto', 'SID', 'Message', 'Threat']]
+        
+        for alert in alerts:
+            time_str = alert.timestamp.strftime('%Y-%m-%d %H:%M:%S') if alert.timestamp else ''
+            threat_str = alert.threat_level.upper() if alert.threat_level else 'SAFE'
+            msg = (alert.message or '')[:60]  # Truncate long messages
+            
+            data.append([
+                time_str,
+                alert.src_ip or '',
+                alert.dest_ip or '',
+                alert.protocol or '',
+                alert.sid or '',
+                msg,
+                threat_str,
+            ])
+        
+        # Create PDF
+        pdf_buffer = BytesIO()
+        doc = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=landscape(letter),
+            topMargin=0.5*inch,
+            bottomMargin=0.5*inch,
+            leftMargin=0.5*inch,
+            rightMargin=0.5*inch,
+        )
+        
+        # Create table
+        table = Table(data, colWidths=[1.2*inch, 1.2*inch, 1.2*inch, 0.7*inch, 0.8*inch, 2.5*inch, 0.8*inch])
+        
+        # Style table
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#333333')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f0f0f0')]),
+            ('GRID', (0, 0), (-1, -1), 1, colors.grey),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        
+        # Build PDF
+        elements = [table]
+        doc.build(elements)
+        
+        # Return response
+        pdf_buffer.seek(0)
+        response = HttpResponse(pdf_buffer.getvalue(), content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="{_build_pdf_export_filename(request)}"'
+        return response
+        
+    except Exception as e:
+        logger.error(f'PDF export failed: {str(e)}')
+        return Response({'error': str(e)}, status=500)

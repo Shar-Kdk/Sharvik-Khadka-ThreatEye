@@ -29,6 +29,26 @@ logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
 
 
+def resolve_plan_tier(plan):
+    """Resolve a subscription plan into the canonical org tier."""
+    return plan.get_tier_key()
+
+
+def get_latest_completed_org_payment(org):
+    """Return the latest completed payment for an organization."""
+    if not org:
+        return None
+    return (
+        Payment.objects.filter(
+            organization=org,
+            status='completed',
+            plan__isnull=False,
+        )
+        .order_by('-created_at')
+        .first()
+    )
+
+
 # ===== 1. LIST PLANS =====
 
 @api_view(['GET'])
@@ -98,14 +118,17 @@ class CreatePaymentIntentView(APIView):
             # --- Check if org already has this plan ---
             org = getattr(request.user, 'organization', None)
             if org and org.is_active:
-                plan_name_lower = plan.display_name.lower()
-                current_tier = org.subscription_tier
-                if (
-                    ('basic' in plan_name_lower and current_tier == 'basic') or
-                    ('professional' in plan_name_lower and current_tier == 'professional')
-                ):
+                selected_tier = resolve_plan_tier(plan)
+                latest_org_payment = get_latest_completed_org_payment(org)
+                if latest_org_payment and latest_org_payment.plan:
+                    current_tier = resolve_plan_tier(latest_org_payment.plan)
+                else:
+                    current_tier = org.subscription_tier
+
+                if selected_tier == current_tier:
+                    current_tier_label = 'Basic plan' if current_tier == 'basic' else 'Professional plan'
                     return Response(
-                        {'error': f'Your organization is already on the {plan.display_name} plan.'},
+                        {'error': f'Your organization is already on the {current_tier_label}.'},
                         status=status.HTTP_400_BAD_REQUEST
                     )
 
@@ -126,7 +149,7 @@ class CreatePaymentIntentView(APIView):
                 currency=currency,
                 metadata={
                     'plan_id': plan.id,
-                    'plan_name': plan.display_name,
+                    'plan_name': plan.get_tier_label(),
                     'user_email': user_email,
                 }
             )
@@ -155,7 +178,7 @@ class CreatePaymentIntentView(APIView):
                     'clientSecret': intent['client_secret'],
                     'publishableKey': settings.STRIPE_PUBLISHABLE_KEY,
                     'payment': serializer.data,
-                    'planName': plan.display_name,
+                    'planName': plan.get_tier_label(),
                     'planId': plan.id,
                 }, status=status.HTTP_201_CREATED)
 
@@ -211,14 +234,8 @@ class VerifyPaymentView(APIView):
                         org = payment.organization
                         plan = payment.plan
 
-                        # Map plan display_name to subscription tier
-                        plan_name_lower = plan.display_name.lower()
-                        if 'basic' in plan_name_lower:
-                            org.subscription_tier = 'basic'
-                        elif 'professional' in plan_name_lower or 'pro' in plan_name_lower:
-                            org.subscription_tier = 'professional'
-                        else:
-                            org.subscription_tier = 'basic'
+                        # Map plan to subscription tier using plan capacity instead of raw display name
+                        org.subscription_tier = resolve_plan_tier(plan)
 
                         # Organization.save() auto-sets is_active=True and max_users
                         org.save()
@@ -309,11 +326,18 @@ def subscription_status(request):
         user = request.user
         org = getattr(user, 'organization', None)
 
-        # Get most recent completed payment
-        latest_payment = Payment.objects.filter(
-            user_email=user.email,
-            status='completed'
-        ).order_by('-created_at').first()
+        # Get most recent completed payment for the organization first.
+        # This keeps plan status consistent across all users in the same org.
+        latest_payment = None
+        if org:
+            latest_payment = get_latest_completed_org_payment(org)
+
+        # Fallback for users without organization-scoped payments.
+        if latest_payment is None:
+            latest_payment = Payment.objects.filter(
+                user_email=user.email,
+                status='completed'
+            ).order_by('-created_at').first()
 
         if org and org.is_active and latest_payment and latest_payment.plan:
             plan = latest_payment.plan
@@ -328,7 +352,8 @@ def subscription_status(request):
 
         return Response({
             'status': status_text,
-            'plan': plan.display_name if plan else None,
+            'plan': plan.get_tier_label() if plan else None,
+            'plan_display_name': plan.display_name if plan else None,
             'plan_id': plan.id if plan else None,
             'max_users': plan.max_users if plan else 1,
             'email_alerts': plan.email_alerts_enabled if plan else False,

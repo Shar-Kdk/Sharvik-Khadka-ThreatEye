@@ -10,3 +10,4 @@ scikit-learn==1.4.2
 joblib==1.4.2
 channels==4.3.2
 daphne==4.2.1
+reportlab==4.0.9

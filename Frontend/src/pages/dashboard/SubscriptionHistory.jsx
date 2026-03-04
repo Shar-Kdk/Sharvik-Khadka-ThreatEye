@@ -10,6 +10,12 @@ const SubscriptionHistory = ({ token }) => {
     const [currentPage, setCurrentPage] = useState(1);
     const navigate = useNavigate();
 
+    const formatAmount = (amount) => {
+        const numericAmount = Number(amount);
+        if (!Number.isFinite(numericAmount)) return '$0.00';
+        return `$${numericAmount.toFixed(2)}`;
+    };
+
     useEffect(() => {
         const fetchHistory = async () => {
             try {
@@ -97,11 +103,11 @@ const SubscriptionHistory = ({ token }) => {
                                                 </div>
                                             </td>
                                             <td className="px-8 py-6">
-                                                <span className="text-gray-200 font-medium">${item.amount.toFixed(2)}</span>
+                                                <span className="text-gray-200 font-medium">{formatAmount(item.amount)}</span>
                                             </td>
                                             <td className="px-8 py-6">
                                                 <span className={`px-3 py-1 rounded-full text-[9px] font-black uppercase tracking-widest border ${
-                                                    item.status === 'active' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
+                                                    item.status === 'active' || item.status === 'completed' ? 'bg-green-500/10 text-green-500 border-green-500/20' :
                                                     item.status === 'pending' ? 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20' :
                                                     'bg-red-500/10 text-red-500 border-red-500/20'
                                                 }`}>

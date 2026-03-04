@@ -4,7 +4,7 @@ import { getDashboardSummary } from '../../services/api';
 export default function DashboardHome({ token }) {
   const [summary, setSummary] = useState({
     totalAlerts24h: 0,
-    alertsBySeverity: { high: 0, medium: 0, low: 0 },
+    alertsBySeverity: { high: 0, medium: 0, safe: 0 },
     activeThreats: 0,
     falsePositives: 0,
     topAttackType: 'N/A',
@@ -115,16 +115,16 @@ export default function DashboardHome({ token }) {
 
         {/* Medium Severity */}
         <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-6">
-          <div className="text-gray-400 text-sm font-medium mb-2">Medium Severity</div>
+          <div className="text-gray-400 text-sm font-medium mb-2">Medium</div>
           <div className="text-4xl font-bold text-yellow-400">{summary.alertsBySeverity.medium}</div>
           <div className="text-xs text-gray-500 mt-2">Moderate alerts</div>
         </div>
 
-        {/* Low Severity */}
+        {/* Safe */}
         <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-6">
-          <div className="text-gray-400 text-sm font-medium mb-2">Low Severity</div>
-          <div className="text-4xl font-bold text-green-400">{summary.alertsBySeverity.low}</div>
-          <div className="text-xs text-gray-500 mt-2">Informational</div>
+          <div className="text-gray-400 text-sm font-medium mb-2">Safe</div>
+          <div className="text-4xl font-bold text-green-400">{summary.alertsBySeverity.safe}</div>
+          <div className="text-xs text-gray-500 mt-2">Benign traffic</div>
         </div>
       </div>
 

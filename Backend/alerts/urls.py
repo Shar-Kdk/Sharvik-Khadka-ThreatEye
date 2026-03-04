@@ -1,6 +1,6 @@
 from django.urls import path
 
-from .views import live_alerts, filter_options, send_alert_email, ws_broadcast_alert
+from .views import live_alerts, filter_options, send_alert_email, ws_broadcast_alert, export_alerts_pdf
 from .analytics import threat_level_distribution, top_attacks, alerts_timeline, protocol_statistics, top_suspicious_ips, dashboard_summary
 
 # ===== ALERTS API ENDPOINTS =====
@@ -26,4 +26,6 @@ urlpatterns = [
     path('send-email/', send_alert_email, name='send_alert_email'),
     # POST: → internal webhook for cross-process WebSocket broadcasting
     path('ws-broadcast/', ws_broadcast_alert, name='ws_broadcast_alert'),
+    # GET: → export filtered alerts as PDF (max 10k rows)
+    path('export/pdf/', export_alerts_pdf, name='export_alerts_pdf'),
 ]

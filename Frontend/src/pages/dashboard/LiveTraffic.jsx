@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { getLiveAlerts, getFilterOptions } from '../../services/api';
+import { getLiveAlerts, getFilterOptions, exportAlertsPDF } from '../../services/api';
 import Pagination from '../../components/common/Pagination';
 
 const MAX_ROWS_PER_PAGE = 50;
@@ -90,8 +90,13 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
   const [dateToFilter, setDateToFilter] = useState('');
   const [searchFilter, setSearchFilter] = useState('');
   const [forceRefresh, setForceRefresh] = useState(0);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const [exportLoading, setExportLoading] = useState(false);
+  const [exportDateFrom, setExportDateFrom] = useState('');
+  const [exportDateTo, setExportDateTo] = useState('');
   const seenAlertIdsRef = useRef(new Set());
   const filterModalRef = useRef(null);
+  const exportMenuRef = useRef(null);
 
   // Dropdown options populated from backend (distinct values)
   const [filterOptions, setFilterOptions] = useState({
@@ -240,13 +245,18 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
           setShowFilterModal(false);
         }
       }
+      if (exportMenuRef.current && !exportMenuRef.current.contains(event.target)) {
+        if (!event.target.closest('button[data-export-btn]')) {
+          setShowExportMenu(false);
+        }
+      }
     };
 
-    if (showFilterModal) {
+    if (showFilterModal || showExportMenu) {
       document.addEventListener('mousedown', handleClickOutside);
       return () => document.removeEventListener('mousedown', handleClickOutside);
     }
-  }, [showFilterModal]);
+  }, [showFilterModal, showExportMenu]);
 
   const handleThreatLevelToggle = (level) => {
     setThreatLevelFilter((prev) =>
@@ -271,6 +281,24 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
     setSearchFilter('');
     setCurrentPage(1);
     setForceRefresh(prev => prev + 1);
+  };
+
+  const handleExportPDF = async () => {
+    setExportLoading(true);
+    try {
+      const exportFilters = {
+        date_from: exportDateFrom,
+        date_to: exportDateTo,
+      };
+      console.log('[LiveTraffic] Exporting PDF with filters:', exportFilters);
+      await exportAlertsPDF(token, exportFilters);
+      setShowExportMenu(false);
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      alert('Failed to export PDF: ' + (err.message || 'Unknown error'));
+    } finally {
+      setExportLoading(false);
+    }
   };
 
   const totalPages = Math.max(1, Math.ceil(totalAvailable / itemsPerPage));
@@ -314,7 +342,6 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
                     : 'bg-[#1f6feb] hover:bg-[#388bfd] text-white'
                   }`}
               >
-                <span>🔍</span>
                 <span>Filter</span>
                 {hasActiveFilters && (
                   <span className="bg-white/20 px-2 py-0.5 rounded text-xs">
@@ -496,6 +523,71 @@ export default function LiveTraffic({ token, latestWsAlert, wsConnectionStatus, 
                       Reset
                     </button>
                   </div>
+                </div>
+              )}
+            </div>
+            {/* Export Button */}
+            <div className="relative">
+              <button
+                data-export-btn
+                onClick={() => setShowExportMenu(!showExportMenu)}
+                disabled={exportLoading}
+                className="px-3 py-2 rounded text-sm font-semibold transition flex items-center gap-2 bg-green-600 hover:bg-green-700 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Export alerts"
+              >
+                <span>{exportLoading ? 'Exporting...' : 'Export'}</span>
+              </button>
+
+              {/* Export Menu with Date Filter */}
+              {showExportMenu && (
+                <div
+                  ref={exportMenuRef}
+                  className="absolute top-full mt-2 right-0 bg-[#0d1117] border border-[#30363d] rounded-lg shadow-2xl z-50 w-80 p-4"
+                >
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-gray-200 mb-3">Export Alerts</h3>
+                    
+                    {/* Date From */}
+                    <div className="mb-3">
+                      <label className="block text-xs text-gray-400 mb-1">From Date (Optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={exportDateFrom}
+                        onChange={(e) => setExportDateFrom(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#161b22] border border-[#30363d] rounded text-white text-xs focus:border-blue-500 outline-none"
+                      />
+                    </div>
+
+                    {/* Date To */}
+                    <div className="mb-4">
+                      <label className="block text-xs text-gray-400 mb-1">To Date (Optional)</label>
+                      <input
+                        type="datetime-local"
+                        value={exportDateTo}
+                        onChange={(e) => setExportDateTo(e.target.value)}
+                        className="w-full px-3 py-2 bg-[#161b22] border border-[#30363d] rounded text-white text-xs focus:border-blue-500 outline-none"
+                      />
+                    </div>
+
+                    {/* Export Options */}
+                    <div className="space-y-2 pt-2 border-t border-[#30363d]">
+                      <button
+                        onClick={handleExportPDF}
+                        disabled={exportLoading}
+                        className="w-full text-left px-3 py-2 hover:bg-[#161b22] text-gray-300 hover:text-white text-xs rounded transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        <span>PDF (10k limit)</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Close button */}
+                  <button
+                    onClick={() => setShowExportMenu(false)}
+                    className="w-full px-3 py-1 mt-2 text-xs bg-gray-600 hover:bg-gray-700 text-white rounded transition"
+                  >
+                    Close
+                  </button>
                 </div>
               )}
             </div>

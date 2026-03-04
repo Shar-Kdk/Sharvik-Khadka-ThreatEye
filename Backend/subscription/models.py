@@ -26,6 +26,16 @@ class SubscriptionPlan(models.Model):
     def __str__(self):
         return f"{self.display_name} (${self.price} USD)"
 
+    def get_tier_key(self):
+        """Return the canonical subscription tier for this plan."""
+        if self.max_users <= 5 or self.price <= 5:
+            return 'basic'
+        return 'professional'
+
+    def get_tier_label(self):
+        """Return a user-friendly plan label for the UI."""
+        return 'Basic plan' if self.get_tier_key() == 'basic' else 'Professional plan'
+
     class Meta:
         ordering = ['price']
 

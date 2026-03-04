@@ -26,3 +26,28 @@ html, body, #root {
 .no-scrollbar::-webkit-scrollbar {
   display: none; /* Chrome, Safari, Opera */
 }
+
+/* Remove browser autofill yellow background from inputs */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active {
+  -webkit-box-shadow: 0 0 0 30px white inset !important;
+  box-shadow: 0 0 0 30px white inset !important;
+  -webkit-transition: background-color 5000s ease-in-out 0s;
+  transition: background-color 5000s ease-in-out 0s;
+}
+
+/* Remove browser autofill text color change */
+input:-webkit-autofill {
+  -webkit-text-fill-color: #111827 !important;
+}
+
+/* Override Stripe element autofill styling */
+.StripeElement {
+  background-color: white !important;
+}
+
+.StripeElement--focus {
+  box-shadow: 0 0 0 2px #3b82f6;
+}

@@ -68,8 +68,12 @@ const SubscriptionPlans = ({ token }) => {
             // Call backend to create Stripe PaymentIntent
             const data = await createPaymentIntent(token, plan.id);
 
-            // Load Stripe.js with the publishable key from backend
-            setStripePromise(loadStripe(data.publishableKey));
+            // In local dev, disable advanced fraud telemetry to avoid noisy
+            // ERR_BLOCKED_BY_CLIENT logs from ad/privacy blockers.
+            const stripeOptions = import.meta.env.DEV
+                ? { advancedFraudSignals: false }
+                : undefined;
+            setStripePromise(loadStripe(data.publishableKey, stripeOptions));
             setClientSecret(data.clientSecret);
             setSelectedPlan(plan);
 
@@ -164,7 +168,7 @@ const SubscriptionPlans = ({ token }) => {
                                     return (
                                         <div key={plan.id} className={`bg-[#0d1117] border rounded-lg p-8 flex flex-col ${isCurrentPlan ? 'border-green-500/50' : 'border-[#30363d]'}`}>
                                             <div className="flex items-center justify-between mb-2">
-                                                <h2 className="text-xl font-bold text-white">{plan.display_name}</h2>
+                                                <h2 className="text-xl font-bold text-white">{plan.tier_label || plan.display_name}</h2>
                                                 {isCurrentPlan && (
                                                     <span className="px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest bg-green-500/10 text-green-500 border border-green-500/20">
                                                         Current Plan
@@ -214,7 +218,7 @@ const SubscriptionPlans = ({ token }) => {
 
                         <div className="bg-[#0d1117] border border-[#30363d] rounded-lg p-8">
                             <h2 className="text-xl font-bold text-white mb-1">Payment Details</h2>
-                            <p className="text-sm text-gray-400 mb-8">Subscribing to {selectedPlan.display_name}</p>
+                            <p className="text-sm text-gray-400 mb-8">Subscribing to {selectedPlan.tier_label || selectedPlan.display_name}</p>
 
                             {stripePromise && clientSecret && (
                                 <Elements stripe={stripePromise} options={{ clientSecret }}>

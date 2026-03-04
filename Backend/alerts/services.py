@@ -24,13 +24,16 @@ logger = logging.getLogger(__name__)
 
 # ===== EMAIL NOTIFICATION FOR ALERTS =====
 # Send email notifications for MEDIUM and HIGH severity alerts
+# Rate limited: only send 1 email per severity level per 10 seconds to avoid spam
+
+_last_email_time_high = {}  # org_id -> timestamp
+_last_email_time_medium = {}  # org_id -> timestamp
+EMAIL_RATE_LIMIT_SECONDS = 10  # Wait at least 10 seconds between emails per severity
 
 def send_alert_notification(alert):
     """
     Send email notification for MEDIUM and HIGH severity alerts.
-    Only sends if organization has email_alerts_enabled in their subscription plan.
-    
-    Sends synchronously with try/except to ensure delivery.
+    Rate limited to avoid spam: max 1 email per severity per 10 seconds per org.
     
     Args:
         alert: Alert object to send notification for
@@ -40,243 +43,165 @@ def send_alert_notification(alert):
         return
     
     try:
-        # Get all organizations' users who should receive alerts
-        # Send to org admins whose organization has email alerts enabled
+        # Get all organizations with email alerts enabled
         organizations = Organization.objects.filter(is_active=True)
-        recipient_emails = []
         
         for org in organizations:
             # Get subscription plan for this organization tier
             if org.subscription_tier == Organization.TIER_NOT_SUBSCRIBED:
-                # Free tier - no email alerts
                 continue
             
-            # Get the enabled subscription plans for this tier
-            if org.subscription_tier == Organization.TIER_BASIC:
-                plans = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
-            elif org.subscription_tier == Organization.TIER_PROFESSIONAL:
-                plans = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
-            else:
+            # Check if any plan allows email alerts
+            plans_with_email = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
+            if not plans_with_email.exists():
                 continue
             
-            if not plans.exists():
-                continue
-            
-            # Get admin users from this organization
-            org_admins = User.objects.filter(
+            # Get all active users from this organization
+            all_org_users = User.objects.filter(
                 organization=org,
                 is_active=True,
                 is_verified=True
             )
+            recipient_emails = [user.email for user in all_org_users if user.email]
             
-            for admin in org_admins:
-                if admin.email:
-                    recipient_emails.append(admin.email)
-        
-        if not recipient_emails:
-            logger.debug(f"No recipients found for alert {alert.id}")
-            return
-        
-        # Prepare email content
-        threat_color = {
-            Alert.THREAT_HIGH: 'red',
-            Alert.THREAT_MEDIUM: 'orange',
-            Alert.THREAT_SAFE: 'green',
-        }.get(alert.threat_level, 'gray')
-        
-        subject = f'ThreatEye Security Alert: {alert.threat_level.upper()} Severity Threat Detected'
-        
-        text_content = f"""THREATEYE SECURITY ALERT NOTIFICATION
+            if not recipient_emails:
+                logger.debug(f"No recipients found for alert {alert.id}")
+                continue
+            
+            # Check rate limit - only send 1 email per severity type per org every N seconds
+            now = timezone.now().timestamp()
+            if alert.threat_level == Alert.THREAT_HIGH:
+                last_time = _last_email_time_high.get(org.id, 0)
+                if now - last_time < EMAIL_RATE_LIMIT_SECONDS:
+                    continue  # Skip this email - rate limited
+                _last_email_time_high[org.id] = now
+            else:
+                last_time = _last_email_time_medium.get(org.id, 0)
+                if now - last_time < EMAIL_RATE_LIMIT_SECONDS:
+                    continue  # Skip this email - rate limited
+                _last_email_time_medium[org.id] = now
+            
+            # Prepare email content - simple and focused
+            subject = f'🛡 ThreatEye Alert: {alert.threat_level.upper()} - {alert.message[:50]}'
+            
+            text_content = f"""THREATEYE SECURITY ALERT
 
-Severity Level: {alert.threat_level.upper()}
-Alert ID: {alert.id}
-Event Timestamp: {alert.timestamp.isoformat()}
-Ingestion Timestamp: {alert.ingested_at.isoformat()}
+Timestamp: {alert.timestamp.isoformat()}
 
-ATTACK DETAILS:
-Source IP Address: {alert.src_ip}
-Source Port: {alert.src_port or 'N/A'}
-Destination IP Address: {alert.dest_ip}
-Destination Port: {alert.dest_port or 'N/A'}
-Protocol: {alert.protocol}
+Message:
+{alert.message}
 
-ALERT INFORMATION:
-Message: {alert.message}
-Classification: {alert.classification or 'N/A'}
-Signature ID (SID): {alert.sid}
-Priority Level: {alert.priority}
+Classification:
+{alert.classification or 'N/A'}
 
-For detailed analysis, please access your ThreatEye dashboard at:
-http://localhost:3000/dashboard/live-traffic
+Signature ID:
+{alert.sid}
 
----
-ThreatEye Intrusion Detection System
-        """
+Source IP: {alert.src_ip}
+Destination IP: {alert.dest_ip}
+"""
+            
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px; }}
+        .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+        .header {{ background: linear-gradient(135deg, #5b4fd1 0%, #7c3aed 100%); color: #ffffff; padding: 30px; text-align: center; }}
+        .header-title {{ font-size: 24px; font-weight: bold; margin: 0; }}
+        .content {{ padding: 30px; }}
+        .section {{ margin-bottom: 25px; }}
+        .section-title {{ font-size: 13px; letter-spacing: 2px; color: #6b7280; text-transform: uppercase; font-weight: 600; margin-bottom: 12px; }}
+        .section-content {{ background-color: #f9fafb; border-left: 4px solid #7c3aed; padding: 15px; border-radius: 4px; font-family: 'Courier New', monospace; font-size: 14px; color: #1f2937; line-height: 1.6; }}
+        .message-box {{ background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; border-radius: 4px; margin-bottom: 20px; }}
+        .message-label {{ font-weight: 600; color: #991b1b; font-size: 13px; margin-bottom: 8px; }}
+        .message-text {{ color: #7f1d1d; font-size: 16px; }}
+        .detail-row {{ display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #e5e7eb; }}
+        .detail-row:last-child {{ border-bottom: none; }}
+        .detail-label {{ font-weight: 600; color: #6b7280; font-size: 13px; }}
+        .detail-value {{ color: #1f2937; }}
+        .footer {{ background-color: #f3f4f6; color: #6b7280; padding: 20px; text-align: center; font-size: 12px; border-top: 1px solid #e5e7eb; }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="header-title">🛡 ThreatEye Security Alert</div>
+        </div>
         
-        html_content = f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <style>
-                body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif; background-color: #f5f5f5; margin: 0; padding: 20px; }}
-                .container {{ max-width: 600px; margin: 0 auto; background-color: #ffffff; }}
-                .header {{ background: linear-gradient(135deg, #5b4fd1 0%, #7c3aed 100%); color: #ffffff; padding: 40px 30px; text-align: center; }}
-                .header-content {{ display: flex; justify-content: center; align-items: center; gap: 12px; margin-bottom: 8px; }}
-                .shield-icon {{ font-size: 28px; }}
-                .header-title {{ font-size: 28px; font-weight: bold; }}
-                .header-highlight {{ background-color: #fbbf24; color: #000000; padding: 0 6px; }}
-                .header-tagline {{ font-size: 14px; opacity: 0.95; margin-top: 8px; }}
-                .content {{ padding: 30px; }}
-                .greeting {{ font-size: 18px; font-weight: 600; color: #1f2937; margin-bottom: 15px; }}
-                .description {{ font-size: 14px; line-height: 1.6; color: #4b5563; margin-bottom: 20px; }}
-                .alert-code-box {{ border: 2px dashed #7c3aed; padding: 30px; border-radius: 6px; text-align: center; margin: 25px 0; background-color: #fafafa; }}
-                .alert-code-label {{ font-size: 12px; letter-spacing: 2px; color: #6b7280; margin-bottom: 10px; text-transform: uppercase; }}
-                .alert-code {{ font-size: 32px; font-weight: bold; color: #7c3aed; letter-spacing: 4px; font-family: 'Courier New', monospace; }}
-                .alert-details-label {{ font-size: 13px; letter-spacing: 1px; color: #6b7280; margin-top: 15px; margin-bottom: 8px; text-transform: uppercase; font-weight: 600; }}
-                .alert-detail-row {{ display: flex; padding: 8px 0; font-size: 14px; border-bottom: 1px solid #e5e7eb; }}
-                .alert-detail-row:last-child {{ border-bottom: none; }}
-                .alert-detail-label {{ font-weight: 600; color: #1f2937; min-width: 140px; }}
-                .alert-detail-value {{ color: #6b7280; word-break: break-all; font-family: 'Courier New', monospace; }}
-                .importance-box {{ background-color: #fef2f2; border-left: 4px solid #dc2626; padding: 15px; margin: 20px 0; border-radius: 4px; }}
-                .importance-label {{ font-weight: 600; color: #991b1b; font-size: 13px; }}
-                .importance-text {{ color: #7f1d1d; font-size: 13px; margin-top: 5px; line-height: 1.5; }}
-                .disclaimer {{ font-size: 13px; line-height: 1.6; color: #4b5563; margin: 20px 0; }}
-                .footer {{ background-color: #1f2937; color: #e5e7eb; padding: 30px; text-align: center; font-size: 13px; }}
-                .footer-greeting {{ margin-bottom: 10px; }}
-                .footer-team {{ font-weight: 600; margin: 5px 0; }}
-                .footer-brand {{ background-color: #fbbf24; color: #000000; padding: 0 4px; }}
-                .footer-copyright {{ margin-top: 15px; opacity: 0.8; }}
-            </style>
-        </head>
-        <body>
-            <div class="container">
-                <div class="header">
-                    <div class="header-content">
-                        <div class="shield-icon">🛡</div>
-                        <div class="header-title"><span class="header-highlight">ThreatEye</span></div>
-                    </div>
-                    <div class="header-tagline">Intelligent Security Detection System</div>
-                </div>
-                
-                <div class="content">
-                    <div class="greeting">Security Alert Detected</div>
-                    
-                    <div class="description">
-                        A network security event has been detected by the ThreatEye Intrusion Detection System. The alert details are provided below. Please review this information and take appropriate action if necessary.
-                    </div>
-                    
-                    <div class="alert-code-box">
-                        <div class="alert-code-label">Alert Severity</div>
-                        <div class="alert-code">{alert.threat_level.upper()}</div>
-                    </div>
-                    
-                    <div class="alert-details-label">Alert Identification</div>
-                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Alert ID:</div>
-                            <div class="alert-detail-value">{alert.id}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Event Time:</div>
-                            <div class="alert-detail-value">{alert.timestamp.isoformat()}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Detection Time:</div>
-                            <div class="alert-detail-value">{alert.ingested_at.isoformat()}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="alert-details-label" style="margin-top: 20px;">Network Details</div>
-                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Source IP:</div>
-                            <div class="alert-detail-value">{alert.src_ip}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Source Port:</div>
-                            <div class="alert-detail-value">{alert.src_port or 'N/A'}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Destination IP:</div>
-                            <div class="alert-detail-value">{alert.dest_ip}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Destination Port:</div>
-                            <div class="alert-detail-value">{alert.dest_port or 'N/A'}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Protocol:</div>
-                            <div class="alert-detail-value">{alert.protocol}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="alert-details-label" style="margin-top: 20px;">Alert Information</div>
-                    <div class="alert-code-box" style="border: none; background-color: #ffffff; padding: 15px 0;">
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Message:</div>
-                            <div class="alert-detail-value"><strong>{alert.message}</strong></div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Classification:</div>
-                            <div class="alert-detail-value">{alert.classification or 'N/A'}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Signature ID:</div>
-                            <div class="alert-detail-value">{alert.sid}</div>
-                        </div>
-                        <div class="alert-detail-row">
-                            <div class="alert-detail-label">Priority:</div>
-                            <div class="alert-detail-value">{alert.priority}</div>
-                        </div>
-                    </div>
-                    
-                    <div class="importance-box">
-                        <div class="importance-label">Important:</div>
-                        <div class="importance-text">For immediate investigation and detailed analysis, please access your ThreatEye dashboard to view the alert and take appropriate action.</div>
-                    </div>
-                    
-                    <div class="disclaimer">
-                        If you did not expect to receive this alert, please contact your system administrator or the ThreatEye security team for assistance.
-                    </div>
-                </div>
-                
-                <div class="footer">
-                    <div class="footer-greeting">Best regards,</div>
-                    <div class="footer-team"><span class="footer-brand">ThreatEye</span> Security Team</div>
-                    <div class="footer-copyright">Copyright 2026 <span class="footer-brand">ThreatEye</span>. All rights reserved.</div>
+        <div class="content">
+            <div class="message-box">
+                <div class="message-label">⚠ {alert.threat_level.upper()} SEVERITY</div>
+                <div class="message-text">{alert.message}</div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">Classification</div>
+                <div class="section-content">
+                    {alert.classification or 'N/A'}
                 </div>
             </div>
-        </body>
-        </html>
-        """
+            
+            <div class="section">
+                <div class="section-title">Signature ID</div>
+                <div class="section-content">
+                    {alert.sid}
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">Network Details</div>
+                <div class="section-content">
+                    <div class="detail-row">
+                        <span class="detail-label">Source IP:</span>
+                        <span class="detail-value">{alert.src_ip}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Destination IP:</span>
+                        <span class="detail-value">{alert.dest_ip}</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="section">
+                <div class="section-title">Timestamp</div>
+                <div class="section-content">
+                    {alert.timestamp.isoformat()}
+                </div>
+            </div>
+        </div>
         
-        # Send email synchronously with proper error handling
-        sent_count = 0
-        for recipient_email in recipient_emails:
-            try:
-                msg = EmailMultiAlternatives(
-                    subject=subject,
-                    body=text_content,
-                    from_email=settings.DEFAULT_FROM_EMAIL,
-                    to=[recipient_email]
-                )
-                msg.attach_alternative(html_content, "text/html")
-                result = msg.send()
-                if result:
-                    sent_count += 1
-                    logger.info(f"Alert email sent to {recipient_email} for alert {alert.id}")
-                else:
-                    logger.warning(f"Failed to send alert email to {recipient_email}")
-            except Exception as e:
-                logger.error(f"Error sending alert email to {recipient_email}: {str(e)}")
-        
-        if sent_count > 0:
-            logger.info(f"Alert {alert.id} notifications sent to {sent_count} recipients")
+        <div class="footer">
+            ThreatEye Intrusion Detection System
+        </div>
+    </div>
+</body>
+</html>"""
+            
+            # Send email synchronously with proper error handling
+            for recipient_email in recipient_emails:
+                try:
+                    msg = EmailMultiAlternatives(
+                        subject=subject,
+                        body=text_content,
+                        from_email=settings.DEFAULT_FROM_EMAIL,
+                        to=[recipient_email]
+                    )
+                    msg.attach_alternative(html_content, "text/html")
+                    result = msg.send()
+                    if result:
+                        logger.info(f"[Alert Email] Sent to {recipient_email} for alert {alert.id} ({alert.threat_level})")
+                    else:
+                        logger.warning(f"[Alert Email] Failed to send to {recipient_email}")
+                except Exception as e:
+                    logger.error(f"[Alert Email] Error sending to {recipient_email}: {str(e)}")
         
     except Exception as e:
         logger.error(f"Error in send_alert_notification for alert {alert.id}: {str(e)}")
+
+
 
 
 # ===== WEBSOCKET BROADCAST FOR REAL-TIME ALERTS =====
@@ -1003,72 +928,16 @@ def _process_alert_batch(alert_objects, enable_ml=True, enable_email=True, enabl
     # except Exception as e:
     #     logger.warning(f'[Batch Prevention] Error: {e}')
 
-    # ---- STEP 5: Single email digest ----
+    # ---- STEP 5: Email notifications ----
+    # Send email notifications for MEDIUM and HIGH threats (rate limited per severity)
     if enable_email:
-        try:
-            high_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_HIGH]
-            medium_alerts = [a for a in saved_alerts if a.threat_level == Alert.THREAT_MEDIUM]
-            if high_alerts or medium_alerts:
-                _send_batch_email_notification(high_alerts, medium_alerts)
-        except Exception as e:
-            logger.warning(f'[Batch Email] Error: {e}')
+        for alert in saved_alerts:
+            try:
+                send_alert_notification(alert)
+            except Exception as e:
+                logger.error(f'[Batch Email] Error sending notification for alert {alert.id}: {e}')
 
     return count
-
-
-def _send_batch_email_notification(high_alerts, medium_alerts):
-    """Send a single digest email for a batch of alerts instead of one per alert."""
-    total_high = len(high_alerts)
-    total_medium = len(medium_alerts)
-
-    subject = f'[ThreatEye] Alert Digest: {total_high} High, {total_medium} Medium alerts'
-
-    # Build a concise summary
-    lines = [f'ThreatEye detected {total_high + total_medium} notable alerts:\n']
-    if high_alerts:
-        lines.append(f'🔴 HIGH SEVERITY ({total_high}):')
-        for a in high_alerts[:10]:  # Cap at 10 examples
-            lines.append(f'  • {a.src_ip} → {a.dest_ip} | {a.message[:80]}')
-        if total_high > 10:
-            lines.append(f'  ... and {total_high - 10} more\n')
-    if medium_alerts:
-        lines.append(f'🟡 MEDIUM SEVERITY ({total_medium}):')
-        for a in medium_alerts[:10]:
-            lines.append(f'  • {a.src_ip} → {a.dest_ip} | {a.message[:80]}')
-        if total_medium > 10:
-            lines.append(f'  ... and {total_medium - 10} more\n')
-
-    body = '\n'.join(lines)
-
-    try:
-        from authentication.models import Organization, User
-        from subscription.models import SubscriptionPlan
-
-        organizations = Organization.objects.filter(is_active=True)
-        recipient_emails = []
-        for org in organizations:
-            if org.subscription_tier == Organization.TIER_NOT_SUBSCRIBED:
-                continue
-            # Check if any plan allows email alerts (simple check)
-            plans_with_email = SubscriptionPlan.objects.filter(email_alerts_enabled=True)
-            if not plans_with_email.exists():
-                continue
-            admins = User.objects.filter(organization=org, role=User.ROLE_ORG_ADMIN)
-            recipient_emails.extend([u.email for u in admins if u.email])
-
-        if recipient_emails:
-            from django.core.mail import send_mail
-            from django.conf import settings as django_settings
-            send_mail(
-                subject,
-                body,
-                django_settings.DEFAULT_FROM_EMAIL,
-                recipient_emails,
-                fail_silently=True,
-            )
-            logger.info(f'[Batch Email] Sent digest to {len(recipient_emails)} recipients')
-    except Exception as e:
-        logger.warning(f'[Batch Email] Failed: {e}')
 
 
 # ===== OPTIMIZED BATCH INGESTION =====
